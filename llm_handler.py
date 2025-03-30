@@ -3,6 +3,7 @@ from openai import OpenAI
 import os
 from dotenv import load_dotenv
 from typing import Optional, Dict
+from datetime import datetime
 
 # Загрузка .env файла
 dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
@@ -15,6 +16,7 @@ class LLMHandler:
             base_url="https://openrouter.ai/api/v1",
             api_key=self.api_key
         )
+        self.today = datetime.now().strftime("%Y-%m-%d")
     
     def parse_calendar_request(self, user_text: str) -> Optional[Dict]:
         """
@@ -45,6 +47,7 @@ class LLMHandler:
     def _build_prompt(self, user_text: str) -> str:
         """Формирует промпт для LLM"""
         return f"""
+        Сегодня {self.today}.
         Пользователь сказал: "{user_text}".
         Извлеки JSON с полями:
         - "event_name" (название встречи),
