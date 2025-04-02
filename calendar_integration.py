@@ -53,13 +53,15 @@ def create_calendar_event(event_data: dict, user_credentials: Credentials):
         from datetime import datetime, timedelta
         try:
             start_dt_obj = datetime.fromisoformat(start_datetime)
-            end_dt_obj = start_dt_obj + timedelta(hours=1)
+            duration_minutes = event_data.get("duration")
+            if duration_minutes is None:
+                duration_minutes = 60
+            end_dt_obj = start_dt_obj + timedelta(minutes=duration_minutes)
             end_datetime = end_dt_obj.isoformat()
         except ValueError:
-             logger.error(f"Invalid date/time format from LLM: {start_datetime}. Using fallback.")
-             # Fallback if parsing fails - adjust as needed
-             start_datetime = f"{event_data['date']}T09:00:00"
-             end_datetime = f"{event_data['date']}T10:00:00"
+            logger.error(f"Invalid date/time format from LLM: {start_datetime}. Using fallback.")
+            start_datetime = f"{event_data['date']}T09:00:00"
+            end_datetime = f"{event_data['date']}T10:00:00"
 
 
         event = {

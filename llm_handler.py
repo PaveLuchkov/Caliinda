@@ -53,6 +53,7 @@ class LLMHandler:
         - "event_name" (название встречи),
         - "date" (дата в формате YYYY-MM-DD),
         - "time" (время в формате HH:MM),
+        - "duration" (продолжительность в минутах или null, если не указано),
         - "is_relative" (True, если указано "завтра", "через 2 дня" и т.д.).
 
         Пример вывода для "Напомни мне про встречу с клиентом завтра в 14:30":
@@ -60,19 +61,29 @@ class LLMHandler:
             "event_name": "Встреча с клиентом",
             "date": "2024-03-31",
             "time": "14:30",
+            "duration": null,
             "is_relative": true
+        }}
+
+        Пример вывода для "Совещание в пятницу на 90 минут в 10:00":
+        {{
+            "event_name": "Совещание",
+            "date": "2024-04-05",
+            "time": "10:00",
+            "duration": 90,
+            "is_relative": false
         }}
         """
     
-    def _parse_response(self, completion) -> Dict:
+    def _parse_response(self, completion) -> dict:
         """Парсит ответ от LLM"""
         result = json.loads(completion.choices[0].message.content)
         
         # Валидация обязательных полей
-        required_fields = ['event_name', 'date', 'time']
+        required_fields = ['event_name', 'date', 'time', 'duration']
         if not all(field in result for field in required_fields):
             raise ValueError("Не все обязательные поля присутствуют в ответе")
-            
+        
         return result
 
 # Пример использования (для тестирования)
