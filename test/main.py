@@ -1,9 +1,9 @@
 import os
 from dotenv import load_dotenv
 import argparse
-from speech_to_text import recognize_speech
-from llm_handler import LLMHandler
-from calendar_integration import create_calendar_event
+from src.speech_to_text import recognize_speech
+from src.llm_handler import LLMHandler
+from src.calendar_integration import create_calendar_event
 from typing import Optional, Dict
 
 def load_environment():

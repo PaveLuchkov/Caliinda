@@ -14,9 +14,9 @@ from google.auth.transport import requests as google_requests
 from google_auth_oauthlib.flow import Flow # For exchanging the auth code
 
 # Your existing imports
-from llm_handler import LLMHandler # Assuming this exists and works
-from calendar_integration import create_calendar_event
-from speech_to_text import recognize_speech # Assuming this exists and works
+from src.llm_handler import LLMHandler # Assuming this exists and works
+from src.calendar_integration import create_calendar_event
+from src.speech_to_text import recognize_speech # Assuming this exists and works
 
 # --- Configuration ---
 logging.basicConfig(level=logging.INFO)
