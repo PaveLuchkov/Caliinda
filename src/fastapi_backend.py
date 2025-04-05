@@ -1,11 +1,11 @@
 # fastapi_backend.py
-from fastapi import FastAPI, UploadFile, HTTPException, Form, Depends, Body
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Depends, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field # For request body models
 import tempfile
 import os
 import logging
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 import traceback
 
 # Google Auth Libraries
@@ -15,7 +15,7 @@ from google_auth_oauthlib.flow import Flow # For exchanging the auth code
 
 # Your existing imports
 from src.llm_handler import LLMHandler # Assuming this exists and works
-from src.calendar_integration import create_calendar_event
+from src.calendar_integration import process_and_create_calendar_events
 from src.speech_to_text import recognize_speech # Assuming this exists and works
 
 # --- Configuration ---
@@ -213,188 +213,554 @@ async def auth_google_exchange(payload: TokenExchangeRequest):
         # Provide a more generic error to the client
         raise HTTPException(status_code=500, detail=f"Failed to exchange Google auth code: {e}")
 
+# --- Хранилище Состояния Диалога (In-Memory - WARNING для продакшена) ---
+class ConversationState(BaseModel):
+    stage: str = "start"
+    initial_request_text: Optional[str] = None
+    classification: Optional[str] = None
+    extracted_event_data: Optional[Dict] = None
+    last_clarification_question: Optional[str] = None
+    error_message: Optional[str] = None
 
-@app.post("/process_audio", tags=["Calendar"])
-async def process_audio(
-    audio: UploadFile,
-    id_token_str: str = Form(..., alias="id_token_str") # Match the name from Android client
+user_conversation_state: Dict[str, ConversationState] = {}
+
+# --- Новая модель для универсального запроса ---
+class UnifiedProcessRequest(BaseModel):
+    id_token_str: str
+    text: Optional[str] = None # Текст, если пользователь ввел его
+    # Если добавляем аудио снова:
+    # audio: Optional[UploadFile] = None # Аудио, если пользователь записал
+
+# --- Вспомогательная функция для очистки состояния ---
+def clear_conversation_state(user_google_id: str):
+    if user_google_id in user_conversation_state:
+        del user_conversation_state[user_google_id]
+        logger.info(f"Cleared conversation state for user {user_google_id}")
+
+
+async def finalize_event_creation(user_google_id: str, user_email: str, state: ConversationState):
+    """Helper function to handle the final event creation step."""
+    logger.info(f"Executing final event creation stage for user {user_email}.")
+
+    creds = get_credentials_from_refresh_token(user_google_id)
+    if not creds:
+        clear_conversation_state(user_google_id)
+        # Используем 401, так как проблема с авторизацией пользователя
+        raise HTTPException(status_code=401, detail="User authorization required or expired. Please sign in again.")
+
+    final_llm_data = state.extracted_event_data
+    if not final_llm_data or not final_llm_data.get("event"):
+        clear_conversation_state(user_google_id)
+        raise HTTPException(status_code=500, detail="Internal error: Final event data missing.")
+
+    try:
+        # --- Вызов НОВОЙ функции ---
+        created_events = process_and_create_calendar_events(final_llm_data, creds)
+
+        clear_conversation_state(user_google_id) # Очищаем состояние после попытки создания
+
+        if not created_events:
+             # Ни одно событие не было создано (возможно, из-за ошибок валидации или API)
+             logger.warning(f"No events were actually created for user {user_email} based on LLM data.")
+             # Возвращаем ошибку или инфо-сообщение? Вернем инфо.
+             return {
+                 "status": "info", # Или "error"? Зависит от того, считаем ли мы это ошибкой LLM или API
+                 "message": "Could not create any events based on the provided details. Please try rephrasing your request."
+             }
+        elif len(created_events) == 1:
+            # --- Успешно создано одно событие ---
+            event_info = created_events[0]
+            logger.info(f"Successfully created 1 event for user {user_email}.")
+            return {
+                "status": "success",
+                "message": "Event created successfully!",
+                "event": {
+                    "event_name": event_info.get("summary"),
+                    "start_time": event_info.get("start", {}).get("dateTime"),
+                    "end_time": event_info.get("end", {}).get("dateTime"),
+                },
+                "event_link": event_info.get("htmlLink"),
+            }
+        else:
+            # --- Успешно создано НЕСКОЛЬКО событий ---
+            logger.info(f"Successfully created {len(created_events)} events for user {user_email}.")
+            # Формируем общее сообщение
+            event_summaries = [ev.get("summary", "Unnamed Event") for ev in created_events]
+            return {
+                "status": "success",
+                "message": f"{len(created_events)} events created successfully!",
+                # Можно вернуть список ссылок или названий
+                "events_created": event_summaries,
+                "first_event_link": created_events[0].get("htmlLink") # Ссылка на первое для примера
+            }
+
+    except Exception as final_ex:
+        # Ловим ошибки из process_and_create_calendar_events (напр., refresh token error)
+        # или другие неожиданные ошибки
+        logger.error(f"Exception during finalize_event_creation for user {user_email}: {final_ex}\n{traceback.format_exc()}")
+        clear_conversation_state(user_google_id) # Очищаем состояние при ошибке
+        # Перебрасываем как HTTP ошибку
+        if "refresh" in str(final_ex).lower(): # Простой чек на ошибку рефреша
+             raise HTTPException(status_code=401, detail=f"Authorization failed: {final_ex}")
+        else:
+             raise HTTPException(status_code=500, detail=f"Failed to process event creation: {final_ex}")
+
+
+# --- Обновленный Универсальный Эндпоинт Обработки ---
+@app.post("/process", tags=["Core Logic"])
+async def process_unified_request(
+    # Используем Form и File для multipart/form-data
+    id_token_str: str = Form(...),
+    text: Optional[str] = Form(None),
+    audio: Optional[UploadFile] = File(None) # Аудио теперь опциональный файл
 ):
     """
-    Processes audio, extracts event details, and creates a Google Calendar event
-    using stored user credentials (obtained via refresh token).
+    Handles both text and audio requests through a multi-stage conversational LLM pipeline.
+    Manages conversation state for clarifications. Prioritizes audio if provided.
     """
-    logger.info("Received request for /process_audio")
+    logger.info("Received request for /process")
+    if text: logger.info(f"Received text form data (length: {len(text)})")
+    if audio: logger.info(f"Received audio file: {audio.filename} ({audio.content_type})")
 
-    # 1. Verify ID Token to identify the user
+    # --- 1. Аутентификация ---
     try:
         id_info = await verify_google_id_token(id_token_str)
         user_google_id = id_info.get('sub')
         user_email = id_info.get('email')
         if not user_google_id:
             raise HTTPException(status_code=401, detail="Could not get user ID from token.")
-        logger.info(f"Audio processing request authenticated for user: {user_email} (ID: {user_google_id})")
+        logger.info(f"Processing request authenticated for user: {user_email} (ID: {user_google_id})")
     except HTTPException as e:
-        raise e # Propagate verification errors
-    except Exception as e:
-        logger.error(f"Unexpected error during ID token verification: {e}")
-        raise HTTPException(status_code=500, detail="Authentication error")
-
-    # 2. Get User Credentials using stored Refresh Token
-    creds = get_credentials_from_refresh_token(user_google_id)
-    if not creds:
-        logger.error(f"No valid credentials found for user {user_email} (ID: {user_google_id}). User may need to re-authenticate via /auth/google/exchange.")
-        # Inform the client they need to re-run the auth flow
-        raise HTTPException(status_code=401, detail="User authorization required. Please sign in again to grant calendar access.")
-
-    tmp_path = None # Initialize outside try block
-    try:
-        # 3. Save audio temporarily
-        # Consider using io.BytesIO if speech_to_text supports it to avoid disk I/O
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as tmp: # Ensure suffix matches expected format
-            content = await audio.read()
-            if not content:
-                raise HTTPException(status_code=400, detail="Empty audio file received.")
-            tmp.write(content)
-            tmp_path = tmp.name
-            logger.info(f"Audio file saved temporarily to: {tmp_path}")
-
-        # 4. Speech-to-Text
-        # Replace with your actual STT implementation
-        logger.info(f"Performing speech-to-text on {tmp_path}")
-        text = recognize_speech(tmp_path)
-        if not text:
-            logger.warning("Speech recognition returned empty text.")
-            # Decide how to handle - error or specific message?
-            raise HTTPException(status_code=400, detail="Could not recognize speech in the audio.")
-        logger.info(f"Recognized text: '{text}'")
-
-
-        # 5. LLM Processing
-        logger.info("Parsing text with LLM...")
-        event_data = llm.parse_calendar_request(text)
-        if not event_data or not event_data.get("event_name") or not event_data.get("date") : # Basic check
-            logger.warning(f"LLM failed to parse event details from text: '{text}'")
-            raise HTTPException(status_code=400, detail=f"Could not understand the event details from your request: '{text}'")
-        logger.info(f"LLM parsed event data: {event_data}")
-
-
-        # 6. Create Calendar Event using the retrieved credentials
-        logger.info(f"Creating calendar event for user: {user_email}")
-        created_event = create_calendar_event(event_data, creds) # Pass the Credentials object
-
-        # 7. Return Success Response
-        return {
-            "status": "success",
-            "message": "Event created successfully!",
-            "event": { # Return structured event data used/created
-                "event_name": created_event.get("summary"),
-                "date": event_data.get("date"), # Or parse from created_event start/end
-                "time": event_data.get("time"), # Or parse
-                "description": created_event.get("description"),
-            },
-            "event_link": created_event.get("htmlLink"), # Link to the event in Google Calendar
-            "recognized_text": text,
-        }
-
-    except HTTPException as e:
-         # Re-raise HTTPExceptions directly
-         raise e
-    except Exception as e:
-        logger.error(f"Error processing audio for user {user_email}: {e}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        # Return a generic server error
-        raise HTTPException(status_code=500, detail=f"An internal server error occurred: {e}")
-
-    finally:
-        # Ensure temporary file is always deleted
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.unlink(tmp_path)
-                logger.info(f"Deleted temporary audio file: {tmp_path}")
-            except Exception as e:
-                logger.error(f"Error deleting temporary file {tmp_path}: {e}")
-
-class ProcessTextRequest(BaseModel):
-    text: str
-    id_token_str: str
-
-
-
-@app.post("/process_text", tags=["Calendar"])
-async def process_text(request_data: ProcessTextRequest):
-    """
-    Processes text input, extracts event details via LLM, and creates a
-    Google Calendar event using stored user credentials.
-    """
-    logger.info(f"Received request for /process_text with text: '{request_data.text}'")
-
-    # 1. Verify ID Token to identify the user
-    try:
-        id_info = await verify_google_id_token(request_data.id_token_str)
-        user_google_id = id_info.get('sub')
-        user_email = id_info.get('email')
-        if not user_google_id:
-            raise HTTPException(status_code=401, detail="Could not get user ID from token.")
-        logger.info(f"Text processing request authenticated for user: {user_email} (ID: {user_google_id})")
-    except HTTPException as e:
-        logger.warning(f"ID Token verification failed: {e.detail} (Status: {e.status_code})")
-        raise e # Propagate verification errors
+        raise e
     except Exception as e:
         logger.error(f"Unexpected error during ID token verification: {e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail="Authentication error")
 
-    # 2. Get User Credentials using stored Refresh Token
-    creds = get_credentials_from_refresh_token(user_google_id)
-    if not creds:
-        logger.error(f"No valid credentials found for user {user_email} (ID: {user_google_id}). User may need to re-authenticate via /auth/google/exchange.")
-        # Inform the client they need to re-run the auth flow
-        raise HTTPException(status_code=401, detail="User authorization required. Please sign in again to grant calendar access.")
+    # --- 2. Получение текста запроса (Приоритет Аудио) ---
+    input_text: Optional[str] = None
+    temp_audio_path: Optional[str] = None # Путь к временному аудиофайлу
 
     try:
-        # 3. Validate Input Text (No STT needed)
-        text = request_data.text
-        if not text or text.isspace():
-            logger.warning("Received empty or blank text message.")
-            raise HTTPException(status_code=400, detail="Empty text message received.")
-        logger.info(f"Processing text: '{text}'")
+        if audio:
+            logger.info(f"Processing provided audio file: {audio.filename}")
+            # --- Обработка Аудио ---
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as tmp: # Укажите нужный суффикс
+                content = await audio.read()
+                if not content:
+                     logger.warning("Empty audio file received.")
+                     raise HTTPException(status_code=400, detail="Empty audio file received.")
+                tmp.write(content)
+                temp_audio_path = tmp.name
+                logger.info(f"Audio file saved temporarily to: {temp_audio_path}")
 
-        # 4. LLM Processing
-        logger.info("Parsing text with LLM...")
-        event_data = llm.parse_calendar_request(text) # Pass text directly
-        # Add more robust checking based on what your LLM returns
-        if not event_data or not event_data.get("event_name") or not event_data.get("date") :
-            logger.warning(f"LLM failed to parse event details from text: '{text}'")
-            # Return the original text in the error message for clarity
-            raise HTTPException(status_code=400, detail=f"Could not understand the event details from your request: '{text}'")
-        logger.info(f"LLM parsed event data: {event_data}")
+            # --- Speech-to-Text ---
+            logger.info(f"Performing speech-to-text on {temp_audio_path}")
+            # Убедитесь, что recognize_speech корректно обрабатывает ошибки и возвращает None или пустую строку при неудаче
+            recognized_text = recognize_speech(temp_audio_path)
 
-        # 5. Create Calendar Event using the retrieved credentials
-        logger.info(f"Creating calendar event for user: {user_email}")
-        created_event = create_calendar_event(event_data, creds) # Pass the Credentials object
+            if not recognized_text or recognized_text.isspace():
+                logger.warning(f"Speech recognition returned empty or failed for {temp_audio_path}.")
+                raise HTTPException(status_code=400, detail="Could not recognize speech in the audio.")
+            else:
+                input_text = recognized_text
+                logger.info(f"Recognized text: '{input_text}'")
 
-        # 6. Return Success Response
-        logger.info(f"Successfully created event for user {user_email}")
-        return {
-            "status": "success",
-            "message": "Event created successfully from text!",
-            "event": { # Return structured event data used/created
-                "event_name": created_event.get("summary"),
-                "date": event_data.get("date"), # Or parse from created_event start/end
-                "time": event_data.get("time"), # Or parse
-                "description": created_event.get("description"),
-            },
-            "event_link": created_event.get("htmlLink"), # Link to the event in Google Calendar
-            "recognized_text": text, # Return the original input text
-        }
+        elif text:
+            # --- Используем предоставленный текст ---
+            logger.info(f"Using provided text.")
+            input_text = text
+        else:
+            # --- Нет ни аудио, ни текста ---
+            logger.warning("No text or audio provided in the request.")
+            raise HTTPException(status_code=400, detail="No text or audio input provided.")
 
-    except HTTPException as e:
-        # Re-raise HTTPExceptions directly
-        raise e
-    except Exception as e:
-        logger.error(f"Error processing text for user {user_email}: {e}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        # Return a generic server error
-        raise HTTPException(status_code=500, detail=f"An internal server error occurred while processing text: {e}")
+        # --- Финальная проверка текста ---
+        if not input_text or input_text.isspace():
+             logger.error("Input text is empty after processing audio/text input.") # Эта ситуация не должна возникать при правильной логике выше
+             raise HTTPException(status_code=400, detail="Input processing resulted in empty text.")
+
+        # --- 3. Управление Состоянием Диалога и Конвейер LLM ---
+        state = user_conversation_state.get(user_google_id, ConversationState(stage="start"))
+        logger.info(f"Current conversation stage for user {user_google_id}: {state.stage}")
+
+        # --- Обработка в зависимости от стадии ---
+        if state.stage == "start":
+            # --- Этап 1: Классификация ---
+            classification_result = llm.classify_intent(input_text)
+            if not classification_result or "error" in classification_result:
+                 error_detail = classification_result.get("error", "Unknown classification error") if classification_result else "LLM Classification call failed"
+                 state.stage = "error"
+                 state.error_message = f"Classification failed: {error_detail}"
+                 logger.error(state.error_message + f" Raw Response: {classification_result.get('raw_response') if classification_result else 'N/A'}")
+                 # Не бросаем исключение, а переходим к возврату ответа об ошибке
+            else:
+                state.classification = classification_result.get("classification")
+                state.initial_request_text = input_text
+                state.stage = "classified"
+                logger.info(f"Intent classified as '{state.classification}'. Moving to next stage.")
+
+        # Переход к следующему этапу возможен сразу после предыдущего, если не было ошибки
+        if state.stage == "classified":
+            if state.classification == "add":
+                # --- Этап 2: Извлечение деталей ---
+                logger.info("Proceeding to event detail extraction.")
+                extraction_result = llm.extract_event_details(state.initial_request_text)
+                state.extracted_event_data = extraction_result
+
+                if not extraction_result or "error" in extraction_result:
+                    error_detail = extraction_result.get("error", "Unknown extraction error") if extraction_result else "LLM Extraction call failed"
+                    state.stage = "error"
+                    state.error_message = f"Event extraction failed: {error_detail}"
+                    logger.error(state.error_message + f" Raw Response: {extraction_result.get('raw_response') if extraction_result else 'N/A'}")
+                elif extraction_result.get("clarification_needed"):
+                    state.stage = "awaiting_clarification"
+                    state.last_clarification_question = extraction_result.get("message")
+                    logger.info("Clarification needed. Question: " + (state.last_clarification_question or "No question provided"))
+                else:
+                    state.stage = "finalizing"
+                    logger.info("Extraction complete, no clarification needed. Moving to finalizing.")
+            else:
+                logger.info(f"Handling non-'add' classification: {state.classification}")
+                clear_conversation_state(user_google_id)
+                return {"status": "info", "message": f"Sorry, I can only help with adding events right now (Intent: {state.classification})."}
+
+        elif state.stage == "awaiting_clarification":
+            # --- Этап 3: Уточнение ---
+            logger.info("Processing user answer for clarification.")
+            if not state.extracted_event_data or not state.last_clarification_question or not state.initial_request_text:
+                 state.stage = "error"; state.error_message = "Internal state error during clarification."
+                 logger.error(state.error_message)
+                 # Переходим к возврату ошибки
+            else:
+                user_answer = input_text # Текущий ввод - это ответ
+                clarification_result = llm.clarify_event_details(
+                    initial_request=state.initial_request_text,
+                    current_event_data=state.extracted_event_data,
+                    question_asked=state.last_clarification_question,
+                    user_answer=user_answer
+                )
+                state.extracted_event_data = clarification_result # Обновляем, даже если ошибка
+
+                if not clarification_result or "error" in clarification_result:
+                    error_detail = clarification_result.get("error", "Unknown clarification error") if clarification_result else "LLM Clarification call failed"
+                    state.stage = "error"
+                    state.error_message = f"Clarification failed: {error_detail}"
+                    logger.error(state.error_message + f" Raw Response: {clarification_result.get('raw_response') if clarification_result else 'N/A'}")
+                elif clarification_result.get("clarification_needed"):
+                     state.stage = "awaiting_clarification" # Снова нужно уточнение
+                     state.last_clarification_question = clarification_result.get("message")
+                     logger.info("Further clarification needed. New Question: " + (state.last_clarification_question or "No question provided"))
+                else:
+                     state.stage = "finalizing" # Уточнение успешно
+                     state.last_clarification_question = None
+                     logger.info("Clarification complete. Moving to finalizing.")
+
+        # --- Сохраняем обновленное состояние (если не было критической ошибки ДО этого момента) ---
+        if state.stage != "error":
+             user_conversation_state[user_google_id] = state
+             logger.info(f"Saved updated state for user {user_google_id}: Stage={state.stage}")
+        else:
+             logger.info(f"Not saving state for user {user_google_id} due to error stage.")
+
+
+        # --- Финальная обработка или возврат ответа ---
+        if state.stage == "finalizing":
+            logger.info(f"Executing final event creation stage for user {user_email}.") # Добавил user_email для лога
+
+            # --- Этап 4: Получение Учетных Данных и Данных События ---
+            creds = get_credentials_from_refresh_token(user_google_id)
+            if not creds:
+                clear_conversation_state(user_google_id)
+                logger.warning(f"Credentials missing for user {user_email}, requiring re-auth.")
+                # Используем 401, так как проблема с авторизацией пользователя
+                raise HTTPException(status_code=401, detail="User authorization required or expired. Please sign in again.")
+
+            final_llm_data = state.extracted_event_data
+            # Проверяем наличие и валидность ключа 'event' (должен быть список)
+            if not final_llm_data or not isinstance(final_llm_data.get("event"), list):
+                clear_conversation_state(user_google_id)
+                logger.error(f"Internal error: Final LLM data for user {user_email} is missing or invalid 'event' list.")
+                raise HTTPException(status_code=500, detail="Internal error: Event data missing or invalid before creation.")
+
+            # --- Вызов новой функции для создания событий ---
+            try:
+                # Эта функция теперь обрабатывает список событий и вызывает _create_single_calendar_event
+                created_events: List[Dict] = process_and_create_calendar_events(final_llm_data, creds)
+
+                # Очищаем состояние ПОСЛЕ успешной или неуспешной *попытки* создания
+                # Если process_and_create_calendar_events бросит исключение, оно будет поймано внешним блоком
+                clear_conversation_state(user_google_id)
+
+                # --- Формирование ответа на основе результата ---
+                if not created_events:
+                    # Ни одно событие не было создано (возможно, из-за ошибок валидации или API внутри цикла)
+                    logger.warning(f"No events were actually created for user {user_email} based on LLM data.")
+                    return {
+                        "status": "info", # Возвращаем инфо-статус
+                        "message": "I couldn't create any events from your request. Perhaps the details were invalid or incomplete. Please try rephrasing."
+                    }
+                elif len(created_events) == 1:
+                    # --- Успешно создано ОДНО событие ---
+                    event_info = created_events[0]
+                    logger.info(f"Successfully created 1 event for user {user_email}: {event_info.get('id')}")
+                    return {
+                        "status": "success",
+                        "message": "Event created successfully!",
+                        "event": { # Структура ответа для одного события
+                            "event_name": event_info.get("summary"),
+                            "start_time": event_info.get("start", {}).get("dateTime"),
+                            "end_time": event_info.get("end", {}).get("dateTime"),
+                        },
+                        "event_link": event_info.get("htmlLink"),
+                    }
+                else:
+                    # --- Успешно создано НЕСКОЛЬКО событий ---
+                    logger.info(f"Successfully created {len(created_events)} events for user {user_email}.")
+                    event_summaries = [ev.get("summary", "Unnamed Event") for ev in created_events]
+                    # Формируем сообщение для пользователя
+                    message = f"{len(created_events)} events created: " + ", ".join(event_summaries)
+                    return {
+                        "status": "success",
+                        "message": message,
+                        "events_created": event_summaries, # Список названий
+                        "first_event_link": created_events[0].get("htmlLink") # Ссылка на первое для примера
+                    }
+
+            except Exception as final_ex:
+                # Ловим ошибки из process_and_create_calendar_events
+                # (напр., ошибка обновления токена, ошибка сборки сервиса)
+                # или другие неожиданные ошибки на этом финальном этапе
+                logger.error(f"Exception during final event creation stage for user {user_email}: {final_ex}\n{traceback.format_exc()}")
+                clear_conversation_state(user_google_id) # Очищаем состояние при ошибке
+
+                # Перебрасываем как HTTP ошибку, чтобы клиент получил ошибку сервера
+                if "refresh" in str(final_ex).lower(): # Простой чек на ошибку рефреша
+                     raise HTTPException(status_code=401, detail=f"Authorization failed: {final_ex}")
+                else:
+                     raise HTTPException(status_code=500, detail=f"Failed to process event creation: {final_ex}")
+
+        elif state.stage == "awaiting_clarification":
+             # Возвращаем уточняющий вопрос (код без изменений)
+             return {
+                 "status": "clarification_needed",
+                 "message": state.last_clarification_question or "Could you please provide more details?"
+             }
+        elif state.stage == "error":
+             # Возвращаем сообщение об ошибке LLM (код без изменений)
+             error_msg = state.error_message or "An unknown processing error occurred."
+             clear_conversation_state(user_google_id)
+             return {
+                 "status": "error",
+                 "message": error_msg
+             }
+        else: # Неожиданное состояние (код без изменений)
+             clear_conversation_state(user_google_id)
+             logger.error(f"Reached unexpected state '{state.stage}' for user {user_google_id}")
+             raise HTTPException(status_code=500, detail="Internal server error: Unexpected conversation state.")
+
+    except HTTPException as http_ex:
+        # Если ошибка возникла до сохранения состояния (напр., аутентификация), состояние не трогаем
+        # Если после - оно может быть уже очищено или содержать ошибку
+        logger.warning(f"Caught HTTPException: {http_ex.status_code} - {http_ex.detail}")
+        raise http_ex # Перебрасываем HTTP ошибки
+    except Exception as final_ex:
+        # Ловим любые другие ошибки (напр., при обработке аудио)
+        logger.error(f"Unhandled exception during processing for user {user_google_id}: {final_ex}\n{traceback.format_exc()}")
+        clear_conversation_state(user_google_id) # Очищаем состояние при неизвестной ошибке
+        raise HTTPException(status_code=500, detail=f"An unexpected internal error occurred: {final_ex}")
+    finally:
+        # --- Очистка временного аудиофайла ---
+        if temp_audio_path and os.path.exists(temp_audio_path):
+            try:
+                os.unlink(temp_audio_path)
+                logger.info(f"Deleted temporary audio file: {temp_audio_path}")
+            except Exception as e:
+                logger.error(f"Error deleting temporary file {temp_audio_path}: {e}")
+
+
+
+
+# @app.post("/process_audio", tags=["Calendar"])
+# async def process_audio(
+#     audio: UploadFile,
+#     id_token_str: str = Form(..., alias="id_token_str") # Match the name from Android client
+# ):
+#     """
+#     Processes audio, extracts event details, and creates a Google Calendar event
+#     using stored user credentials (obtained via refresh token).
+#     """
+#     logger.info("Received request for /process_audio")
+
+#     # 1. Verify ID Token to identify the user
+#     try:
+#         id_info = await verify_google_id_token(id_token_str)
+#         user_google_id = id_info.get('sub')
+#         user_email = id_info.get('email')
+#         if not user_google_id:
+#             raise HTTPException(status_code=401, detail="Could not get user ID from token.")
+#         logger.info(f"Audio processing request authenticated for user: {user_email} (ID: {user_google_id})")
+#     except HTTPException as e:
+#         raise e # Propagate verification errors
+#     except Exception as e:
+#         logger.error(f"Unexpected error during ID token verification: {e}")
+#         raise HTTPException(status_code=500, detail="Authentication error")
+
+#     # 2. Get User Credentials using stored Refresh Token
+#     creds = get_credentials_from_refresh_token(user_google_id)
+#     if not creds:
+#         logger.error(f"No valid credentials found for user {user_email} (ID: {user_google_id}). User may need to re-authenticate via /auth/google/exchange.")
+#         # Inform the client they need to re-run the auth flow
+#         raise HTTPException(status_code=401, detail="User authorization required. Please sign in again to grant calendar access.")
+
+#     tmp_path = None # Initialize outside try block
+#     try:
+#         # 3. Save audio temporarily
+#         # Consider using io.BytesIO if speech_to_text supports it to avoid disk I/O
+#         with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as tmp: # Ensure suffix matches expected format
+#             content = await audio.read()
+#             if not content:
+#                 raise HTTPException(status_code=400, detail="Empty audio file received.")
+#             tmp.write(content)
+#             tmp_path = tmp.name
+#             logger.info(f"Audio file saved temporarily to: {tmp_path}")
+
+#         # 4. Speech-to-Text
+#         # Replace with your actual STT implementation
+#         logger.info(f"Performing speech-to-text on {tmp_path}")
+#         text = recognize_speech(tmp_path)
+#         if not text:
+#             logger.warning("Speech recognition returned empty text.")
+#             # Decide how to handle - error or specific message?
+#             raise HTTPException(status_code=400, detail="Could not recognize speech in the audio.")
+#         logger.info(f"Recognized text: '{text}'")
+
+
+#         # 5. LLM Processing
+#         logger.info("Parsing text with LLM...")
+#         event_data = llm.parse_calendar_request(text)
+#         if not event_data or not event_data.get("event_name") or not event_data.get("date") : # Basic check
+#             logger.warning(f"LLM failed to parse event details from text: '{text}'")
+#             raise HTTPException(status_code=400, detail=f"Could not understand the event details from your request: '{text}'")
+#         logger.info(f"LLM parsed event data: {event_data}")
+
+
+#         # 6. Create Calendar Event using the retrieved credentials
+#         logger.info(f"Creating calendar event for user: {user_email}")
+#         created_event = create_calendar_event(event_data, creds) # Pass the Credentials object
+
+#         # 7. Return Success Response
+#         return {
+#             "status": "success",
+#             "message": "Event created successfully!",
+#             "event": { # Return structured event data used/created
+#                 "event_name": created_event.get("summary"),
+#                 "date": event_data.get("date"), # Or parse from created_event start/end
+#                 "time": event_data.get("time"), # Or parse
+#                 "description": created_event.get("description"),
+#             },
+#             "event_link": created_event.get("htmlLink"), # Link to the event in Google Calendar
+#             "recognized_text": text,
+#         }
+
+#     except HTTPException as e:
+#          # Re-raise HTTPExceptions directly
+#          raise e
+#     except Exception as e:
+#         logger.error(f"Error processing audio for user {user_email}: {e}")
+#         logger.error(f"Traceback: {traceback.format_exc()}")
+#         # Return a generic server error
+#         raise HTTPException(status_code=500, detail=f"An internal server error occurred: {e}")
+
+#     finally:
+#         # Ensure temporary file is always deleted
+#         if tmp_path and os.path.exists(tmp_path):
+#             try:
+#                 os.unlink(tmp_path)
+#                 logger.info(f"Deleted temporary audio file: {tmp_path}")
+#             except Exception as e:
+#                 logger.error(f"Error deleting temporary file {tmp_path}: {e}")
+
+# class ProcessTextRequest(BaseModel):
+#     text: str
+#     id_token_str: str
+
+
+
+# @app.post("/process_text", tags=["Calendar"])
+# async def process_text(request_data: ProcessTextRequest):
+#     """
+#     Processes text input, extracts event details via LLM, and creates a
+#     Google Calendar event using stored user credentials.
+#     """
+#     logger.info(f"Received request for /process_text with text: '{request_data.text}'")
+
+#     # 1. Verify ID Token to identify the user
+#     try:
+#         id_info = await verify_google_id_token(request_data.id_token_str)
+#         user_google_id = id_info.get('sub')
+#         user_email = id_info.get('email')
+#         if not user_google_id:
+#             raise HTTPException(status_code=401, detail="Could not get user ID from token.")
+#         logger.info(f"Text processing request authenticated for user: {user_email} (ID: {user_google_id})")
+#     except HTTPException as e:
+#         logger.warning(f"ID Token verification failed: {e.detail} (Status: {e.status_code})")
+#         raise e # Propagate verification errors
+#     except Exception as e:
+#         logger.error(f"Unexpected error during ID token verification: {e}\n{traceback.format_exc()}")
+#         raise HTTPException(status_code=500, detail="Authentication error")
+
+#     # 2. Get User Credentials using stored Refresh Token
+#     creds = get_credentials_from_refresh_token(user_google_id)
+#     if not creds:
+#         logger.error(f"No valid credentials found for user {user_email} (ID: {user_google_id}). User may need to re-authenticate via /auth/google/exchange.")
+#         # Inform the client they need to re-run the auth flow
+#         raise HTTPException(status_code=401, detail="User authorization required. Please sign in again to grant calendar access.")
+
+#     try:
+#         # 3. Validate Input Text (No STT needed)
+#         text = request_data.text
+#         if not text or text.isspace():
+#             logger.warning("Received empty or blank text message.")
+#             raise HTTPException(status_code=400, detail="Empty text message received.")
+#         logger.info(f"Processing text: '{text}'")
+
+#         # 4. LLM Processing
+#         logger.info("Parsing text with LLM...")
+#         event_data = llm.parse_calendar_request(text) # Pass text directly
+#         # Add more robust checking based on what your LLM returns
+#         if not event_data or not event_data.get("event_name") or not event_data.get("date") :
+#             logger.warning(f"LLM failed to parse event details from text: '{text}'")
+#             # Return the original text in the error message for clarity
+#             raise HTTPException(status_code=400, detail=f"Could not understand the event details from your request: '{text}'")
+#         logger.info(f"LLM parsed event data: {event_data}")
+
+#         # 5. Create Calendar Event using the retrieved credentials
+#         logger.info(f"Creating calendar event for user: {user_email}")
+#         created_event = create_calendar_event(event_data, creds) # Pass the Credentials object
+
+#         # 6. Return Success Response
+#         logger.info(f"Successfully created event for user {user_email}")
+#         return {
+#             "status": "success",
+#             "message": "Event created successfully from text!",
+#             "event": { # Return structured event data used/created
+#                 "event_name": created_event.get("summary"),
+#                 "date": event_data.get("date"), # Or parse from created_event start/end
+#                 "time": event_data.get("time"), # Or parse
+#                 "description": created_event.get("description"),
+#             },
+#             "event_link": created_event.get("htmlLink"), # Link to the event in Google Calendar
+#             "recognized_text": text, # Return the original input text
+#         }
+
+#     except HTTPException as e:
+#         # Re-raise HTTPExceptions directly
+#         raise e
+#     except Exception as e:
+#         logger.error(f"Error processing text for user {user_email}: {e}")
+#         logger.error(f"Traceback: {traceback.format_exc()}")
+#         # Return a generic server error
+#         raise HTTPException(status_code=500, detail=f"An internal server error occurred while processing text: {e}")
 
 # --- Root endpoint for testing ---
 @app.get("/", tags=["Status"])
