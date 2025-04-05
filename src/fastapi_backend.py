@@ -314,6 +314,87 @@ async def process_audio(
             except Exception as e:
                 logger.error(f"Error deleting temporary file {tmp_path}: {e}")
 
+class ProcessTextRequest(BaseModel):
+    text: str
+    id_token_str: str
+
+
+
+@app.post("/process_text", tags=["Calendar"])
+async def process_text(request_data: ProcessTextRequest):
+    """
+    Processes text input, extracts event details via LLM, and creates a
+    Google Calendar event using stored user credentials.
+    """
+    logger.info(f"Received request for /process_text with text: '{request_data.text}'")
+
+    # 1. Verify ID Token to identify the user
+    try:
+        id_info = await verify_google_id_token(request_data.id_token_str)
+        user_google_id = id_info.get('sub')
+        user_email = id_info.get('email')
+        if not user_google_id:
+            raise HTTPException(status_code=401, detail="Could not get user ID from token.")
+        logger.info(f"Text processing request authenticated for user: {user_email} (ID: {user_google_id})")
+    except HTTPException as e:
+        logger.warning(f"ID Token verification failed: {e.detail} (Status: {e.status_code})")
+        raise e # Propagate verification errors
+    except Exception as e:
+        logger.error(f"Unexpected error during ID token verification: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail="Authentication error")
+
+    # 2. Get User Credentials using stored Refresh Token
+    creds = get_credentials_from_refresh_token(user_google_id)
+    if not creds:
+        logger.error(f"No valid credentials found for user {user_email} (ID: {user_google_id}). User may need to re-authenticate via /auth/google/exchange.")
+        # Inform the client they need to re-run the auth flow
+        raise HTTPException(status_code=401, detail="User authorization required. Please sign in again to grant calendar access.")
+
+    try:
+        # 3. Validate Input Text (No STT needed)
+        text = request_data.text
+        if not text or text.isspace():
+            logger.warning("Received empty or blank text message.")
+            raise HTTPException(status_code=400, detail="Empty text message received.")
+        logger.info(f"Processing text: '{text}'")
+
+        # 4. LLM Processing
+        logger.info("Parsing text with LLM...")
+        event_data = llm.parse_calendar_request(text) # Pass text directly
+        # Add more robust checking based on what your LLM returns
+        if not event_data or not event_data.get("event_name") or not event_data.get("date") :
+            logger.warning(f"LLM failed to parse event details from text: '{text}'")
+            # Return the original text in the error message for clarity
+            raise HTTPException(status_code=400, detail=f"Could not understand the event details from your request: '{text}'")
+        logger.info(f"LLM parsed event data: {event_data}")
+
+        # 5. Create Calendar Event using the retrieved credentials
+        logger.info(f"Creating calendar event for user: {user_email}")
+        created_event = create_calendar_event(event_data, creds) # Pass the Credentials object
+
+        # 6. Return Success Response
+        logger.info(f"Successfully created event for user {user_email}")
+        return {
+            "status": "success",
+            "message": "Event created successfully from text!",
+            "event": { # Return structured event data used/created
+                "event_name": created_event.get("summary"),
+                "date": event_data.get("date"), # Or parse from created_event start/end
+                "time": event_data.get("time"), # Or parse
+                "description": created_event.get("description"),
+            },
+            "event_link": created_event.get("htmlLink"), # Link to the event in Google Calendar
+            "recognized_text": text, # Return the original input text
+        }
+
+    except HTTPException as e:
+        # Re-raise HTTPExceptions directly
+        raise e
+    except Exception as e:
+        logger.error(f"Error processing text for user {user_email}: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        # Return a generic server error
+        raise HTTPException(status_code=500, detail=f"An internal server error occurred while processing text: {e}")
 
 # --- Root endpoint for testing ---
 @app.get("/", tags=["Status"])
