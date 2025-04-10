@@ -20,6 +20,11 @@ else:
     logger.warning(f".env file not found at {dotenv_path}")
 
 
+# TODO: добавление "запаса по времени" (Leeway / Clock Skew Tolerance) при валидации токена на бэкенде
+
+
+
+
 class LLMHandler:
     def __init__(self):
         self.api_key = os.getenv('OPENROUTER_API_KEY')
