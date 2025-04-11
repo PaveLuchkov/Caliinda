@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from typing import Optional, Dict, List, Any # Добавили List, Any
 from datetime import datetime, timedelta # Добавили timedelta
 import logging # Добавили logging
-import asyncio
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
