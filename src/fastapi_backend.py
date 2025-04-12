@@ -14,7 +14,7 @@ from google.auth.transport import requests as google_requests
 from google_auth_oauthlib.flow import Flow
 
 # --- Импорт локальных модулей ---
-import config # Наш файл конфигурации
+import src.config as config # Наш файл конфигурации
 from src.database import get_db_session # Функция для получения сессии БД
 import src.database as db_utils # Функции для работы с БД (get_user_by_google_id, etc.)
 from sqlalchemy.orm import Session # Тип для сессии БД
@@ -145,25 +145,54 @@ async def auth_google_exchange(payload: TokenExchangeRequest, db: Session = Depe
         flow.fetch_token(code=payload.auth_code)
 
         credentials_result = flow.credentials
-        if not credentials_result or not credentials_result.refresh_token:
-            logger.error("Failed to obtain refresh token from Google.")
-            raise HTTPException(status_code=400, detail="Could not obtain refresh token from Google.")
+        if not credentials_result or not credentials_result.token: # Проверяем наличие хотя бы access_token
+            logger.error("Failed to obtain access token (or any tokens) from Google.")
+            # Возможно, стоит проверить credentials_result на наличие ошибки 'invalid_grant'
+            error_detail = "Could not obtain valid tokens from Google."
+            if hasattr(credentials_result, 'error_details'): # Попытка получить больше информации
+                error_detail += f" Details: {credentials_result.error_details}"
+            raise HTTPException(status_code=400, detail=error_detail)
 
-        refresh_token = credentials_result.refresh_token
+        access_token = credentials_result.token # Есть access token
+        refresh_token = credentials_result.refresh_token # Может быть None, если уже выдавался
 
-        # --- Сохранение в БД ---
-        db_utils.upsert_user_token(
-            db_session=db,
-            google_id=user_google_id,
-            email=user_email,
-            full_name=user_full_name,
-            refresh_token=refresh_token
-        )
-        logger.info(f"Successfully obtained and stored refresh token in LOCAL DB for user: {user_email} (ID: {user_google_id})")
+        if refresh_token:
+            # --- Сохранение/Обновление в БД (только если получили НОВЫЙ refresh_token) ---
+            logger.info("Received a new refresh token from Google. Storing/updating in DB.")
+            try:
+                db_utils.upsert_user_token(
+                    db_session=db,
+                    google_id=user_google_id,
+                    email=user_email,
+                    full_name=user_full_name,
+                    refresh_token=refresh_token # Сохраняем новый токен
+                )
+                logger.info(f"Successfully stored/updated refresh token in DB for user: {user_email}")
+            except Exception as db_exc:
+                logger.error(f"Database error while storing refresh token for {user_email}: {db_exc}", exc_info=True)
+                # Можно вернуть 500 ошибку, т.к. не смогли сохранить важные данные
+                raise HTTPException(status_code=500, detail="Database error storing token.")
 
+        else:
+            # --- Refresh token НЕ получен (вероятно, уже выдавался) ---
+            logger.warning(f"No new refresh token received from Google for user: {user_email}. Assuming already granted.")
+            # Не обновляем refresh_token в БД.
+            # Можно добавить проверку, есть ли пользователь уже в БД, для уверенности.
+            existing_user = db_utils.get_user_by_google_id(db, user_google_id)
+            if not existing_user or not existing_user.refresh_token:
+                logger.error(f"User {user_email} exists but has no refresh token in DB, and Google did not provide one now.")
+                # Это проблемная ситуация - согласие вроде есть, а токена нет.
+                # Возможно, стоит попросить пользователя перелогиниться с отзывом разрешений.
+                raise HTTPException(status_code=400, detail="Authorization inconsistent. Please try signing out and signing in again.")
+            else:
+                logger.info(f"User {user_email} already has a refresh token in DB. Proceeding without update.")
+
+
+        # --- Возвращаем успешный ответ ---
+        logger.info(f"Authorization successful for user: {user_email}")
         return {
             "status": "success",
-            "message": "Authorization successful (Local). Calendar access granted.",
+            "message": "Authorization successful. Calendar access granted.",
             "user_email": user_email
         }
 
