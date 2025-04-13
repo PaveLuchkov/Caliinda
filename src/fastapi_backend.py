@@ -421,10 +421,6 @@ async def process_unified_request(
         state = user_conversation_state.get(user_google_id, ConversationState(stage="start"))
         logger.info(f"Current conversation stage for user {user_google_id}: {state.stage}")
 
-        # --- Логика стадий диалога (start, classified, awaiting_clarification) ---
-        # ВЕСЬ ваш существующий код обработки стадий диалога остается ЗДЕСЬ без изменений
-        # Используйте 'input_text', 'user_google_id', 'state', 'time', 'timeZone', 'llm', 'db' как и раньше.
-
         # --- Обработка в зависимости от стадии ---
         if state.stage == "start":
             # --- Этап 1: Классификация ---
@@ -438,6 +434,7 @@ async def process_unified_request(
                 state.classification = classification_result.get("classification")
                 state.initial_request_text = input_text
                 state.stage = "classified"
+                logger.info(f"User time : {time}")
                 logger.info(f"Intent classified as '{state.classification}' for user {user_google_id}. Moving to next stage.")
 
         # Переход к следующему этапу возможен сразу после предыдущего, если не было ошибки

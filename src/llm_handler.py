@@ -129,11 +129,11 @@ class LLMHandler:
             \"event\": [{{
             \"summary\": \"string/null\",
             \"start\": {{
-                \"dateTime\": \"ISO8601/null\",
+                \"dateTime\": \"YYYY-MM-DDTHH:MM:SS\",
                 \"timeZone\": \"Asia/Yekaterinburg\"
             }},
             \"end\": {{
-                \"dateTime\": \"ISO8601/null\",
+                \"dateTime\": \"YYYY-MM-DDTHH:MM:SS\",
                 \"timeZone\": \"Asia/Yekaterinburg\"
             }},
             \"recurrence\": [\"RRULE-строка/null\"]
@@ -145,7 +145,7 @@ class LLMHandler:
         Правила:
         1. Обязательные поля Google Calendar API:
             - summary (название)
-            - start.dateTime и end.dateTime (в ISO8601)
+            - start.dateTime и end.dateTime
             - Для повторений: recurrence с массивом RRULE
 
         2. Преобразование данных:
@@ -290,7 +290,7 @@ class LLMHandler:
         }}
         1. Обязательные поля:
             - summary ≠ null
-            - start.dateTime в формате ISO8601 (2025-04-05T19:00:00)
+            - start.dateTime в формате YYYY-MM-DDTHH:MM:SS (2025-04-05T19:00:00)
             - Для повторяющихся событий: recurrence ≠ null
 
         2. Автозаполнение:
