@@ -545,7 +545,7 @@ async def process_unified_request(
             try:
                 # Передаем полученные creds и данные от LLM
                 # Убедитесь, что process_and_create_calendar_events принимает эти аргументы
-                created_events: List[Dict] = process_and_create_calendar_events(final_llm_data, creds)
+                created_events: List[Dict] = process_and_create_calendar_events(final_llm_data, creds, timeZone)
 
                 # --- Очищаем состояние ПОСЛЕ УСПЕШНОЙ попытки создания ---
                 clear_conversation_state(user_google_id)

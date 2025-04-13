@@ -153,8 +153,8 @@ class LLMHandler:
             end.dateTime = start.dateTime + duration
             - Для повторений: конвертируй в RRULE:
                     Правила для RRULE:
-                    1. Все даты в UTC:
-                        - Пример: 2025-07-07T23:59:59Z
+                    1. Все даты:
+                        - Пример: 2025-07-07T23:59:59
                     2. Формат BYDAY: 
                         - Дни недели: MO,TU,WE,TH,FR,SA,SU
                     3. Интервалы:
@@ -184,8 +184,8 @@ class LLMHandler:
             \"event\": [
             {{
                 \"summary\": \"Совещание по проекту X\",
-                \"start\": {{ \"dateTime\": \"2025-03-04T10:00:00+03:00\" }},
-                \"end\": {{ \"dateTime\": \"2025-03-04T11:00:00+03:00\" }},
+                \"start\": {{ \"dateTime\": \"2025-03-04T10:00:00\" }},
+                \"end\": {{ \"dateTime\": \"2025-03-04T11:00:00\" }},
                 \"recurrence\": [\"RRULE:FREQ=WEEKLY;BYDAY=TU\"]
             }}
             ],
@@ -216,13 +216,13 @@ class LLMHandler:
             \"event\": [
             {{
                 \"summary\": \"Митап\",
-                \"start\": {{ \"dateTime\": \"2025-03-25T18:30:00+03:00\" }},
+                \"start\": {{ \"dateTime\": \"2025-03-25T18:30:00\" }},
                 \"end\": {{ \"dateTime\": null }},
                 \"recurrence\": null
             }},
             {{
                 \"summary\": \"Воркшоп\",
-                \"start\": {{ \"dateTime\": \"2025-03-27T11:00:00+03:00\" }},
+                \"start\": {{ \"dateTime\": \"2025-03-27T11:00:00\" }},
                 \"end\": {{ \"dateTime\": null }},
                 \"recurrence\": null
             }}
@@ -290,7 +290,7 @@ class LLMHandler:
         }}
         1. Обязательные поля:
             - summary ≠ null
-            - start.dateTime в формате ISO8601 (2025-04-05T19:00:00+05:00)
+            - start.dateTime в формате ISO8601 (2025-04-05T19:00:00)
             - Для повторяющихся событий: recurrence ≠ null
 
         2. Автозаполнение:
@@ -304,8 +304,8 @@ class LLMHandler:
 
         4. Формат RRULE:
             Правила для RRULE:
-            1. Все даты в UTC:
-                - Пример: 2025-07-07T23:59:59Z
+            1. Все даты:
+                - Пример: 2025-07-07T23:59:59
             2. Формат BYDAY: 
                 - Дни недели: MO,TU,WE,TH,FR,SA,SU
             3. Интервалы:

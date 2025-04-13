@@ -49,7 +49,8 @@ def _create_single_calendar_event(event_body: Dict[str, Any], service: Resource)
 def process_and_create_calendar_events(
         
     llm_response_data: Dict[str, Any],
-    user_credentials: Credentials
+    user_credentials: Credentials,
+    timeZone = str(datetime.datetime.now().astimezone().utcoffset())
 ) -> List[Dict]:
     """
     Processes the LLM response, validates event data, and creates one or more
@@ -113,7 +114,7 @@ def process_and_create_calendar_events(
         start_dt = start_info.get("dateTime") if start_info else None
         end_dt = end_info.get("dateTime") if end_info else None
         # Часовой пояс берем из start, если есть, иначе используем дефолтный (хотя LLM должна вставлять)
-        timezone = start_info.get("timeZone") if start_info else "Asia/Yekaterinburg" # TODO: Сделать динамическим
+        timeZone = start_info.get("timeZone") if start_info else "Asia/Yekaterinburg" # TODO: Сделать динамическим
 
         if not all([summary, start_dt, end_dt]):
             logger.warning(f"Skipping event #{index+1} due to missing mandatory fields (summary, start.dateTime, or end.dateTime). Data: {event_detail}")
@@ -124,11 +125,11 @@ def process_and_create_calendar_events(
             "summary": summary,
             "start": {
                 "dateTime": start_dt,
-                "timeZone": timezone,
+                "timeZone": timeZone,
             },
             "end": {
                 "dateTime": end_dt,
-                "timeZone": timezone, # Должен совпадать со start
+                "timeZone": timeZone, # Должен совпадать со start
             },
             # Опционально: добавить другие поля, если LLM их вернет
             # "description": event_detail.get("description"),
