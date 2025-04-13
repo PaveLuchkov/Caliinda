@@ -227,6 +227,8 @@ def clear_conversation_state(user_google_id: str):
 @app.post("/process", tags=["Core Logic"])
 async def process_unified_request(
     id_token_str: str = Form(...),
+    time: str = Form(...),
+    timeZone: str = Form(...),
     text: Optional[str] = Form(None),
     audio: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db) # Добавляем зависимость от БД
@@ -290,7 +292,11 @@ async def process_unified_request(
             if state.classification == "add":
                 # --- Этап 2: Извлечение деталей ---
                 logger.info("Proceeding to event detail extraction.")
-                extraction_result = llm.extract_event_details(state.initial_request_text)
+                extraction_result = llm.extract_event_details(
+                    state.initial_request_text,
+                    time = time,
+                    user_timezone = timeZone
+                      )
                 state.extracted_event_data = extraction_result
 
                 if not extraction_result or "error" in extraction_result:
@@ -323,7 +329,9 @@ async def process_unified_request(
                     initial_request=state.initial_request_text,
                     current_event_data=state.extracted_event_data,
                     question_asked=state.last_clarification_question,
-                    user_answer=user_answer
+                    user_answer=user_answer,
+                    time=time,
+                    user_timezone =timeZone
                 )
                 state.extracted_event_data = clarification_result # Обновляем, даже если ошибка
 

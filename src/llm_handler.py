@@ -112,7 +112,7 @@ class LLMHandler:
             return {"error": "Invalid classification response format from LLM", "raw_response": result}
 
 
-    def extract_event_details(self, user_text: str, user_timezone: str = "Asia/Yekaterinburg") -> Optional[Dict]:
+    def extract_event_details(self, user_text: str, user_timezone: str = "Asia/Yekaterinburg", time: str = datetime.now().strftime("%Y-%m-%d")) -> Optional[Dict]:
         """
         Этап 2: Извлекает детали события из текста пользователя.
         :param user_text: Текст пользователя.
@@ -120,9 +120,8 @@ class LLMHandler:
         :return: Словарь со структурой события или None/ошибку.
         """
         logger.info(f"LLM Stage 2: Extracting event details for text: '{user_text}'")
-        today = datetime.now().strftime("%Y-%m-%d")
         prompt = f"""
-        Ты — ассистент для добавления событий в Google Calendar. Сегодня {today}. Часовой пояс пользователя: {user_timezone}.
+        Ты — ассистент для добавления событий в Google Calendar. Время и дата пользователя {time}. Часовой пояс пользователя: {user_timezone}.
         Проанализируй сообщение пользователя и извлеки детали для создания события(-ий) в календаре.
         Сообщение пользователя: "{user_text}". Отвечай ТОЛЬКО JSON:
 
@@ -252,7 +251,7 @@ class LLMHandler:
             return {"error": "Invalid event extraction response format from LLM", "raw_response": result}
 
 
-    def clarify_event_details(self, initial_request: str, current_event_data: Dict, question_asked: str, user_answer: str, user_timezone: str = "Asia/Yekaterinburg") -> Optional[Dict]:
+    def clarify_event_details(self, initial_request: str, current_event_data: Dict, question_asked: str, user_answer: str, user_timezone: str = "Asia/Yekaterinburg", time: str = datetime.now().strftime("%Y-%m-%d")) -> Optional[Dict]:
         """
         Этап 3: Обновляет детали события на основе ответа пользователя на уточняющий вопрос.
         :param initial_request: Исходный запрос пользователя.
@@ -270,11 +269,10 @@ class LLMHandler:
 
         # Сериализуем текущие данные для промпта
         current_data_str = json.dumps(current_event_data, indent=2, ensure_ascii=False)
-        today = datetime.now().strftime("%Y-%m-%d")
 
         prompt = f"""
         Контекст:
-        - Сегодня: {today}
+        - Время и лень пользователя: {time}
         - Часовой пояс: {user_timezone}
         - Исходный запрос пользователя: "{initial_request}"
         - Текущие извлеченные данные о событии: {current_data_str}
