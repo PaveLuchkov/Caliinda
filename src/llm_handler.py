@@ -97,7 +97,7 @@ class LLMHandler:
             logger.error(f"Error calling LLM: {str(e)}\n{traceback.format_exc()}")
             return {"error": f"LLM API call failed: {e}"}
 
-    def clara(self, user_input: str, time: str, timezone: str, history: List[Dict[str, str]], calendar_results: Optional[str] = None) -> Optional[Dict]:
+    def clara(self, user_input: str, time: str, timezone: str, temper: str, history: List[Dict[str, str]], calendar_results: Optional[str] = None) -> Optional[Dict]:
         """
         Клара: Основная модель взаимодействия.
         :param user_input: Текст текущего запроса пользователя ИЛИ системный текст (например, после поиска по календарю).
@@ -115,7 +115,9 @@ class LLMHandler:
             "user_timezone": timezone,
             "history": history,
             "user_input": user_input, # Передаем актуальный ввод (может быть и системным)
-            "calendar_search_results": calendar_results # Передаем результаты поиска, если они есть
+            "calendar_search_results": calendar_results, # Передаем результаты поиска, если они есть
+            "temper": temper
+            # TODO сделать это фишкой в приложении, характер Клары
         }
 
         # Генерируем промпт

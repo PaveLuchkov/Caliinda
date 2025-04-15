@@ -352,7 +352,8 @@ async def process_unified_request(
     timeZone: str = Form(..., description="Client's IANA timezone name (e.g., Europe/Moscow)"),
     text: Optional[str] = Form(None), # Текстовый ввод
     audio: Optional[UploadFile] = File(None), # Аудио ввод
-    db: Session = Depends(get_db) # Сессия БД
+    db: Session = Depends(get_db), # Сессия БД
+    temper: str = Form(None), # Дополнительный параметр (если нужен)
 ):
     """
     Handles user request (text or audio), orchestrates LLMs and Google Calendar actions.
@@ -421,7 +422,8 @@ async def process_unified_request(
             user_text=input_text,
             time=time,           # Время из запроса
             timezone=timeZone,   # Таймзона из запроса
-            db=db                # Сессия БД
+            db=db,                # Сессия БД
+            temper = temper, # Дополнительный параметр (если нужен)
         )
 
         # 3. Формирование ответа FastAPI

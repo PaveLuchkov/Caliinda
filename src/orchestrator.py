@@ -360,7 +360,7 @@ class Orchestrator:
 
 
     # --- Основной метод handle_user_request ---
-    async def handle_user_request(self, user_google_id: str, user_text: str, time: str, timezone: str, db: Session) -> Dict[str, Any]:
+    async def handle_user_request(self, user_google_id: str, user_text: str, temper: str, time: str, timezone: str, db: Session) -> Dict[str, Any]:
         """Основная логика обработки запроса с использованием Clara."""
         logger.info(f"--- Handling request for user {user_google_id} ---")
         if not redis.redis_client: return {"status": "error", "message": "History service unavailable."}
@@ -371,7 +371,7 @@ class Orchestrator:
         try:
             # --- Первый вызов Clara ---
             clara_response = self.llm_handler.clara(
-                user_input=user_text, time=time, timezone=timezone, history=history
+                user_input=user_text, time=time, timezone=timezone, history=history, temper=temper
             )
 
             if not clara_response or "error" in clara_response:
@@ -413,7 +413,7 @@ class Orchestrator:
                     second_clara_input = f"User's original request: '{user_text}'. Results for calendar query '{search_params}' are in history. Decide next step."
                     second_clara_response = self.llm_handler.clara(
                         user_input=second_clara_input, time=time, timezone=timezone,
-                        history=history_with_calendar, calendar_results=calendar_results_str
+                        history=history_with_calendar, calendar_results=calendar_results_str, temper=temper
                     )
 
                     if not second_clara_response or "error" in second_clara_response:
