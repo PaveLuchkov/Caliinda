@@ -1,0 +1,11 @@
+services:
+  redis:
+    image: "redis:alpine" # Легковесный образ
+    ports:
+      - "6379:6379" # Проброс порта по умолчанию
+    volumes:
+      - redis_data:/data # Опционально: для сохранения данных между перезапусками
+    # Если нужен пароль:
+    command: redis-server --requirepass bHRS2M9f7:bJDgc
+volumes:
+  redis_data:

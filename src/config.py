@@ -27,6 +27,15 @@ SCOPES = [
     'https://www.googleapis.com/auth/userinfo.email'
 ]
 
+
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
+REDIS_DB = int(os.getenv("REDIS_DB_HISTORY", 0)) # Отдельная БД для истории
+HISTORY_TTL_SECONDS = int(os.getenv("HISTORY_TTL_SECONDS", 10)) # Время жизни истории (30 минут)
+MAX_HISTORY_LENGTH = int(os.getenv("MAX_HISTORY_LENGTH", 15)) # Макс. кол-во сообщений в истории
+
+
 # Проверка наличия обязательных переменных
 if not all([DB_PASSWORD, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET]):
     raise ValueError("One or more essential environment variables (DB_PASSWORD, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET) are missing. Check your .env file.")
