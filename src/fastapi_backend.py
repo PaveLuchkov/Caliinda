@@ -21,7 +21,7 @@ from src.database import get_db_session # Функция для получени
 import src.database as db_utils # Функции для работы с БД (get_user_by_google_id, etc.)
 from sqlalchemy.orm import Session # Тип для сессии БД
 from src.llm_handler import LLMHandler
-from src.calendar_integration import get_events_for_date, SimpleCalendarEvent
+from src.calendar_integration import get_events_for_date, SimpleCalendarEvent, get_events_for_range
 from src.speech_to_text import recognize_speech
 from src.orchestrator import Orchestrator
 import src.redis_cache as redis
@@ -275,74 +275,81 @@ async def auth_google_exchange(payload: TokenExchangeRequest, db: Session = Depe
         raise HTTPException(status_code=500, detail=detail)
 
 @app.get(
-    "/calendar/events",
-    response_model=List[CalendarEventResponse], # Указываем модель ответа (список событий)
-    tags=["Calendar"]
+    "/calendar/events/range", # Новый путь
+    response_model=List[CalendarEventResponse], # Модель ответа та же - список событий
+    tags=["Calendar"] # Тот же тег
 )
-async def get_calendar_events(
-    # Запрос даты как обязательный параметр query string
-    date: str = Query(..., description="Date to fetch events for (YYYY-MM-DD format)", regex=r"^\d{4}-\d{2}-\d{2}$"),
-    # Используем зависимость для аутентификации и получения ID пользователя
+async def get_calendar_events_range(
+    # Новые параметры: startDate и endDate
+    startDate: str = Query(..., description="Start date for the range (YYYY-MM-DD format)", regex=r"^\d{4}-\d{2}-\d{2}$"),
+    endDate: str = Query(..., description="End date for the range (YYYY-MM-DD format)", regex=r"^\d{4}-\d{2}-\d{2}$"),
+    # Зависимости остаются теми же
     user_google_id: str = Depends(get_current_user_id),
-    # Получаем сессию БД
     db: Session = Depends(get_db)
 ):
     """
-    Fetches Google Calendar events for the authenticated user for a specified date.
+    Fetches Google Calendar events for the authenticated user for a specified date range.
     Requires a valid Bearer ID token in the Authorization header.
     """
-    logger.info(f"Received request for /calendar/events for user {user_google_id} on date {date}")
+    logger.info(f"Received request for /calendar/events/range for user {user_google_id} from {startDate} to {endDate}")
 
-    # 1. Парсинг даты
+    # 1. Парсинг дат
     try:
-        target_date_obj = datetime.datetime.strptime(date, '%Y-%m-%d').date()
+        start_date_obj = datetime.datetime.strptime(startDate, '%Y-%m-%d').date()
+        end_date_obj = datetime.datetime.strptime(endDate, '%Y-%m-%d').date()
     except ValueError:
-        logger.warning(f"Invalid date format received: {date}")
-        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+        logger.warning(f"Invalid date format received: startDate={startDate}, endDate={endDate}")
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD for both startDate and endDate.")
 
-    # 2. Получение учетных данных Google для пользователя из БД
+    # Проверка логичности диапазона
+    if start_date_obj > end_date_obj:
+         logger.warning(f"Invalid date range: start date {startDate} is after end date {endDate}")
+         raise HTTPException(status_code=400, detail="Invalid date range: startDate cannot be after endDate.")
+
+    # 2. Получение учетных данных Google и обновление токена (логика та же)
     creds = get_credentials_from_db_token(user_google_id, db)
     if not creds:
         logger.error(f"Could not retrieve valid Google credentials for user {user_google_id} from DB.")
-        # Пользователь аутентифицирован на нашем API, но нет учетных данных для Google
         raise HTTPException(status_code=403, detail="Google Calendar access not configured or token revoked. Please sign in again.")
-    
+
     try:
         if creds.expired and creds.refresh_token:
             logger.info(f"Google access token expired for user {user_google_id}, attempting refresh.")
+            # Используй правильный объект Request (возможно, из google.auth.transport.requests)
             creds.refresh(google_requests.Request())
             logger.info(f"Google access token refreshed successfully for user {user_google_id}.")
+            # TODO: Не забудь реализовать сохранение обновленного токена в БД!
+            # save_refreshed_credentials(user_google_id, creds, db)
     except Exception as refresh_error:
          logger.error(f"Failed to refresh Google access token for user {user_google_id}: {refresh_error}", exc_info=True)
-         # Если не удалось обновить токен, скорее всего, доступ отозван
          raise HTTPException(status_code=403, detail=f"Failed to refresh Google access token. Access might be revoked. Details: {refresh_error}")
 
-
-    # 3. Вызов функции для получения событий из Google Calendar
+    # 3. Вызов НОВОЙ функции для получения событий из Google Calendar
     try:
-        logger.debug(f"Calling get_events_for_date for user {user_google_id}")
-        # Передаем объект Credentials и дату
-        simple_events_list: list[SimpleCalendarEvent] = get_events_for_date(creds, target_date_obj)
+        logger.debug(f"Calling get_events_for_range for user {user_google_id}")
+        # Передаем Credentials и объекты дат
+        simple_events_list: List[SimpleCalendarEvent] = get_events_for_range(creds, start_date_obj, end_date_obj)
 
         # Преобразуем SimpleCalendarEvent в dict для FastAPI/Pydantic
+        # FastAPI автоматически проверит соответствие модели CalendarEventResponse
         response_events = [event.to_dict() for event in simple_events_list]
 
-        logger.info(f"Successfully fetched {len(response_events)} events for user {user_google_id} on {date}")
+        logger.info(f"Successfully fetched {len(response_events)} events for user {user_google_id} in range {startDate} to {endDate}")
         return response_events # FastAPI автоматически преобразует в JSON
 
+    # Обработка ошибок остается такой же, как в старом эндпоинте
     except HttpError as api_error:
-        logger.error(f"Google Calendar API error for user {user_google_id}: {api_error.status_code} - {api_error.reason}", exc_info=True)
+        logger.error(f"Google Calendar API error for user {user_google_id} (range {startDate}-{endDate}): {api_error.status_code} - {api_error.reason}", exc_info=True)
         detail = f"Google Calendar API error: {api_error.reason}"
-        # Особые случаи
         if api_error.status_code == 401 or api_error.status_code == 403:
              detail = "Access to Google Calendar denied or token invalid. Please sign in again."
-             raise HTTPException(status_code=403, detail=detail) # Возвращаем 403
-        # Другие ошибки API (например, 404 Calendar not found, 5xx)
-        raise HTTPException(status_code=502, detail=detail) # 502 Bad Gateway - ошибка при связи с внешним сервисом
+             raise HTTPException(status_code=403, detail=detail)
+        raise HTTPException(status_code=502, detail=detail)
 
     except Exception as e:
-        logger.error(f"Unexpected error processing calendar events request for user {user_google_id}: {e}", exc_info=True)
+        logger.error(f"Unexpected error processing calendar events range request for user {user_google_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error processing request: {e}")
+    
 
 # --- Эндпоинт /process (ОБНОВЛЕННЫЙ) ---
 @app.post("/process", response_model=ProcessResponse, tags=["AI Logic"])

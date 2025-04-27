@@ -30,7 +30,6 @@ class Orchestrator:
         self.llm_handler = llm_handler
 
     def _get_valid_credentials(self, user_google_id: str, db: Session) -> Optional[credentials.Credentials]:
-        # ... (код из предыдущего ответа)
         refresh_token = db_utils.get_refresh_token(db, user_google_id)
         if not refresh_token: return None
         try:
@@ -256,7 +255,7 @@ class Orchestrator:
 
                 elif action_type == "change":
                     # Извлечь EventID
-                    match = re.search(r"EventID:\s*(\S+)", description_string, re.IGNORECASE)
+                    match = re.search(r"EventID:\s*([^;\s]+)", description_string, re.IGNORECASE)
                     if not match: error_message = "Could not parse EventID from change description."
                     else:
                         event_id_for_op = match.group(1).strip()

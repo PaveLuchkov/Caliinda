@@ -80,7 +80,7 @@ class LLMHandler:
             logger.info(f"LLM Raw Response: {response_content}")
             if json_output:
                 # Попытка исправить распространенные ошибки JSON перед парсингом
-                cleaned_content = response_content.strip().strip('`').strip()
+                cleaned_content = response_content.strip().strip('`').strip().rstrip(',')
                 if cleaned_content.startswith('json'):
                      cleaned_content = cleaned_content[4:].strip()
 
