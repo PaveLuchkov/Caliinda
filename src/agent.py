@@ -5,6 +5,9 @@ from google.adk.agents import Agent
 from datetime import datetime
 # @title 1. Import LiteLlm
 from google.adk.models.lite_llm import LiteLlm
+import litellm
+
+litellm._turn_on_debug()
 
 client_id = os.getenv("GOOGLE_OAUTH_CLIENT_ID")
 client_secret = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET")
@@ -21,12 +24,12 @@ calendar_insert = calendar_tool_set.get_tool("calendar_events_insert")
 # calendar_tools
 root_agent = Agent(
     name="Google_Calendar_Agent",
-    # model=LiteLlm(model = MODEL_OR),
+    model=LiteLlm(model = MODEL_OR),
     description=(
         "Agent to manage google calendars, including creating events, "
     ),
     instruction=(
         f"You are a helpful agent who can add ivents in user calendar. Now is {now}"
     ),
-    tools=[calendar_check, calendar_insert]
+    tools=[calendar_insert]
 )
