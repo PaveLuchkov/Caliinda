@@ -1,7 +1,9 @@
 # fastapi_backend.py
 import datetime
-from fastapi import FastAPI, HTTPException, Depends, Header, Query, File, UploadFile, Form
+from fastapi import FastAPI, HTTPException, Depends, Header, Query, File, UploadFile, Form, status
 from fastapi.middleware.cors import CORSMiddleware
+from grpc import Status
+from mcp import Resource
 from pydantic import BaseModel
 import tempfile
 import os
@@ -13,7 +15,6 @@ from google.oauth2 import id_token, credentials
 from google.auth.transport import requests as google_requests
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.errors import HttpError
-from requests import HTTPError
 
 # --- Импорт локальных модулей ---
 import src.config as config # Наш файл конфигурации
@@ -25,7 +26,10 @@ from src.calendar_integration import get_events_for_date, SimpleCalendarEvent, g
 from src.speech_to_text import recognize_speech
 from src.orchestrator import Orchestrator
 import src.redis_cache as redis
-
+from pydantic import BaseModel, Field, field_validator
+from fastapi import FastAPI, Depends, HTTPException, Body
+from google.oauth2.credentials import Credentials  # Для работы с Credentials
+from googleapiclient.discovery import build
 
 # --- Configuration ---
 logging.basicConfig(level=logging.INFO)
@@ -61,8 +65,35 @@ class CalendarEventResponse(BaseModel):
     summary: str
     startTime: str
     endTime: str
+    isAllDay: bool
     description: Optional[str] = None
     location: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class CreateEventRequest(BaseModel):
+    summary: str = Field(..., min_length=1, description="Event title")
+    startTime: str = Field(..., description="Start time in ISO 8601 format (date or datetime)")
+    endTime: str = Field(..., description="End time in ISO 8601 format (date or datetime)")
+    isAllDay: bool = Field(..., description="Flag indicating if the event is all-day")
+    description: Optional[str] = Field(None, description="Optional event description")
+    location: Optional[str] = Field(None, description="Optional event location")
+
+    @field_validator('endTime')
+    @classmethod # Добавляем classmethod для Pydantic V2
+    def end_time_after_start_time(cls, v, info): # info вместо values в Pydantic V2
+        start_time = info.data.get('startTime')
+        if start_time and v < start_time:
+            logger.warning(f"Validation warning: endTime '{v}' might be before startTime '{start_time}'. Allowing for now.")
+            # Добавить реальный парсинг и сравнение datetime, если нужна строгая валидация
+        return v
+
+# Модель ответа при успешном создании события
+class CreateEventResponse(BaseModel):
+    status: str = "success"
+    message: str = "Event created successfully"
+    eventId: Optional[str] = Field(None, description="ID of the created Google Calendar event")
 
 # --- Initialize Handlers ---
 llm_handler_instance = LLMHandler()
@@ -459,6 +490,107 @@ async def process_unified_request(
                 logger.info(f"Deleted temp audio file: {temp_audio_path}")
             except Exception as e:
                 logger.error(f"Error deleting temp file {temp_audio_path}: {e}")
+
+
+@app.post(
+    "/calendar/events",
+    response_model=CreateEventResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Calendar"],
+    summary="Create a new Google Calendar event",
+    responses={
+        400: {"description": "Invalid input data"},
+        401: {"description": "Authentication failed (token issue)"},
+        403: {"description": "Forbidden (e.g., scope missing, user not in DB)"},
+        500: {"description": "Internal server error"},
+        502: {"description": "Google API error"},
+    }
+)
+async def create_calendar_event(
+    event_data: CreateEventRequest, # Данные события из тела запроса
+    user_google_id: str = Depends(get_current_user_id), # Проверка аутентификации и получение ID
+    db: Session = Depends(get_db) # Получаем сессию БД для получения Credentials
+):
+    """ Creates a new event in the user's primary Google Calendar. """
+    logger.info(f"Received request to create event for user {user_google_id}: '{event_data.summary}'")
+
+    # 1. Получаем Credentials пользователя из БД
+    creds = get_credentials_from_db_token(user_google_id, db)
+    if not creds:
+        # get_current_user_id уже проверил, что пользователь есть в БД,
+        # значит, проблема именно с получением/обновлением токена.
+        logger.error(f"Could not retrieve/refresh valid Google credentials for user {user_google_id}.")
+        # Используем 403, т.к. проблема с доступом к ресурсу Google
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Google Calendar access token invalid or revoked. Please sign in again.")
+
+    # 2. Формируем тело запроса для Google API
+    event_body = {
+        'summary': event_data.summary,
+        'description': event_data.description,
+        'location': event_data.location,
+        'start': {},
+        'end': {}
+    }
+    if event_data.isAllDay:
+        # Google Calendar API ожидает только дату для all-day событий
+        try:
+            # Проверяем формат на всякий случай
+            datetime.date.fromisoformat(event_data.startTime)
+            datetime.date.fromisoformat(event_data.endTime)
+            event_body['start']['date'] = event_data.startTime
+            event_body['end']['date'] = event_data.endTime # Конец не включительно
+        except ValueError:
+             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid date format for all-day event. Use YYYY-MM-DD.")
+    else:
+        # Google Calendar API ожидает dateTime в формате RFC3339
+        # Клиент должен прислать строку в правильном формате (например, из Instant.toString() или со смещением)
+        event_body['start']['dateTime'] = event_data.startTime
+        event_body['end']['dateTime'] = event_data.endTime
+        # event_body['start']['timeZone'] = '...' # Опционально
+
+    # 3. Вызов Google Calendar API для вставки события
+    try:
+        service: Resource = build('calendar', 'v3', credentials=creds)
+        logger.info(f"Attempting to insert event for user {user_google_id}: '{event_data.summary}'")
+
+        created_event: dict = service.events().insert(
+            calendarId='primary',
+            body=event_body
+        ).execute()
+
+        event_id = created_event.get('id')
+        logger.info(f"Event created successfully for user {user_google_id}. Event ID: {event_id}")
+
+        # Возвращаем успешный ответ с ID события
+        return CreateEventResponse(eventId=event_id)
+
+    except HttpError as error:
+        # Обрабатываем ошибки Google API
+        error_details = error.resp.get('content', b'').decode('utf-8')
+        status_code = error.resp.status
+        logger.error(f"Google API error inserting event for user {user_google_id}: {status_code} - {error_details}", exc_info=True)
+
+        http_status = status.HTTP_502_BAD_GATEWAY # По умолчанию Bad Gateway
+        detail=f"Google API Error: {error_details}"
+        if status_code == 401:
+             http_status=status.HTTP_401_UNAUTHORIZED
+             detail=f"Google API Authentication Error: {error_details}"
+        elif status_code == 403:
+             http_status=status.HTTP_403_FORBIDDEN
+             detail=f"Google API Forbidden: {error_details}"
+        elif status_code == 400:
+             http_status=status.HTTP_400_BAD_REQUEST
+             detail=f"Google API Bad Request (check data format/values): {error_details}"
+        # Добавим обработку 404, если вдруг 'primary' календарь не найден
+        elif status_code == 404:
+             http_status = status.HTTP_404_NOT_FOUND
+             detail = "Primary Google Calendar not found."
+
+        raise HTTPException(status_code=http_status, detail=detail)
+
+    except Exception as e:
+        logger.error(f"Unexpected error inserting event for user {user_google_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error while creating event.")
 
 
 # --- Root endpoint for testing ---
