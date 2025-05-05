@@ -77,16 +77,34 @@ class CreateEventRequest(BaseModel):
     startTime: str = Field(..., description="Start time in ISO 8601 format (date or datetime)")
     endTime: str = Field(..., description="End time in ISO 8601 format (date or datetime)")
     isAllDay: bool = Field(..., description="Flag indicating if the event is all-day")
+    # --- ДОБАВЛЕНО поле timeZoneId ---
+    timeZoneId: Optional[str] = Field(
+        None,
+        description="Time zone ID (e.g., 'Asia/Yekaterinburg') required for non-all-day events"
+    )
     description: Optional[str] = Field(None, description="Optional event description")
     location: Optional[str] = Field(None, description="Optional event location")
+    recurrence: Optional[List[str]] = Field(
+        None,
+        description="Recurrence rules in RFC 5545 format (e.g., ['RRULE:FREQ=DAILY;COUNT=5'])"
+    )
 
+    # Валидатор можно оставить или улучшить для парсинга дат/времени
     @field_validator('endTime')
-    @classmethod # Добавляем classmethod для Pydantic V2
-    def end_time_after_start_time(cls, v, info): # info вместо values в Pydantic V2
+    @classmethod
+    def end_time_after_start_time(cls, v, info):
         start_time = info.data.get('startTime')
-        if start_time and v < start_time:
+        # TODO: Добавить парсинг и сравнение, если нужна строгая валидация
+        # try:
+        #     start_dt = datetime.datetime.fromisoformat(start_time)
+        #     end_dt = datetime.datetime.fromisoformat(v)
+        #     if end_dt <= start_dt:
+        #         raise ValueError("End time must be after start time")
+        # except (TypeError, ValueError):
+        #      logger.warning(f"Could not perform strict datetime validation for startTime='{start_time}', endTime='{v}'")
+        #      pass # Пока пропускаем, если не можем распарсить
+        if start_time and v < start_time: # Простое строковое сравнение (ненадежно)
             logger.warning(f"Validation warning: endTime '{v}' might be before startTime '{start_time}'. Allowing for now.")
-            # Добавить реальный парсинг и сравнение datetime, если нужна строгая валидация
         return v
 
 # Модель ответа при успешном создании события
@@ -512,15 +530,12 @@ async def create_calendar_event(
     db: Session = Depends(get_db) # Получаем сессию БД для получения Credentials
 ):
     """ Creates a new event in the user's primary Google Calendar. """
-    logger.info(f"Received request to create event for user {user_google_id}: '{event_data.summary}'")
+    logger.info(f"Received request to create event for user {user_google_id}: {event_data.model_dump()}")
 
     # 1. Получаем Credentials пользователя из БД
     creds = get_credentials_from_db_token(user_google_id, db)
     if not creds:
-        # get_current_user_id уже проверил, что пользователь есть в БД,
-        # значит, проблема именно с получением/обновлением токена.
         logger.error(f"Could not retrieve/refresh valid Google credentials for user {user_google_id}.")
-        # Используем 403, т.к. проблема с доступом к ресурсу Google
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Google Calendar access token invalid or revoked. Please sign in again.")
 
     # 2. Формируем тело запроса для Google API
@@ -529,62 +544,75 @@ async def create_calendar_event(
         'description': event_data.description,
         'location': event_data.location,
         'start': {},
-        'end': {}
+        'end': {},
+        'recurrence': event_data.recurrence
     }
     if event_data.isAllDay:
-        # Google Calendar API ожидает только дату для all-day событий
         try:
-            # Проверяем формат на всякий случай
             datetime.date.fromisoformat(event_data.startTime)
             datetime.date.fromisoformat(event_data.endTime)
             event_body['start']['date'] = event_data.startTime
-            event_body['end']['date'] = event_data.endTime # Конец не включительно
+            event_body['end']['date'] = event_data.endTime
         except ValueError:
-             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid date format for all-day event. Use YYYY-MM-DD.")
+            logger.warning(f"Invalid date format for all-day event: startTime={event_data.startTime}, endTime={event_data.endTime}")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid date format for all-day event. Use YYYY-MM-DD.")
     else:
-        # Google Calendar API ожидает dateTime в формате RFC3339
-        # Клиент должен прислать строку в правильном формате (например, из Instant.toString() или со смещением)
+        if not event_data.timeZoneId:
+            logger.error(f"Missing 'timeZoneId' in request for non-all-day event from user {user_google_id}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Field 'timeZoneId' is required when 'isAllDay' is false."
+            )
+        
         event_body['start']['dateTime'] = event_data.startTime
+        event_body['start']['timeZone'] = event_data.timeZoneId # <-- Используем timeZoneId
         event_body['end']['dateTime'] = event_data.endTime
-        # event_body['start']['timeZone'] = '...' # Опционально
+        event_body['end']['timeZone'] = event_data.timeZoneId   # <-- Используем timeZoneId
+
+        logger.debug(f"Event times and timeZone set for non-all-day event: "
+                     f"startTime={event_data.startTime}, endTime={event_data.endTime}, timeZone={event_data.timeZoneId}")
+
+    event_body_cleaned = {k: v for k, v in event_body.items() if v is not None}
+    # Особенно важно для recurrence, если он None
+    if 'recurrence' in event_body_cleaned and not event_body_cleaned['recurrence']:
+         del event_body_cleaned['recurrence']
+
+    logger.info(f"Constructed event body for Google API: {event_body}")
 
     # 3. Вызов Google Calendar API для вставки события
     try:
         service: Resource = build('calendar', 'v3', credentials=creds)
-        logger.info(f"Attempting to insert event for user {user_google_id}: '{event_data.summary}'")
+        logger.info(f"Attempting to insert event for user {user_google_id}: {event_body}")
 
         created_event: dict = service.events().insert(
             calendarId='primary',
-            body=event_body
+            body=event_body_cleaned # Используем очищенное тело события
         ).execute()
 
         event_id = created_event.get('id')
         logger.info(f"Event created successfully for user {user_google_id}. Event ID: {event_id}")
 
-        # Возвращаем успешный ответ с ID события
         return CreateEventResponse(eventId=event_id)
 
     except HttpError as error:
-        # Обрабатываем ошибки Google API
-        error_details = error.resp.get('content', b'').decode('utf-8')
-        status_code = error.resp.status
+        error_details = getattr(error, 'content', b'').decode('utf-8')
+        status_code = error.resp.status if hasattr(error, 'resp') else 500
         logger.error(f"Google API error inserting event for user {user_google_id}: {status_code} - {error_details}", exc_info=True)
 
-        http_status = status.HTTP_502_BAD_GATEWAY # По умолчанию Bad Gateway
-        detail=f"Google API Error: {error_details}"
+        http_status = status.HTTP_502_BAD_GATEWAY
+        detail = f"Google API Error: {error_details}"
         if status_code == 401:
-             http_status=status.HTTP_401_UNAUTHORIZED
-             detail=f"Google API Authentication Error: {error_details}"
+            http_status = status.HTTP_401_UNAUTHORIZED
+            detail = f"Google API Authentication Error: {error_details}"
         elif status_code == 403:
-             http_status=status.HTTP_403_FORBIDDEN
-             detail=f"Google API Forbidden: {error_details}"
+            http_status = status.HTTP_403_FORBIDDEN
+            detail = f"Google API Forbidden: {error_details}"
         elif status_code == 400:
-             http_status=status.HTTP_400_BAD_REQUEST
-             detail=f"Google API Bad Request (check data format/values): {error_details}"
-        # Добавим обработку 404, если вдруг 'primary' календарь не найден
+            http_status = status.HTTP_400_BAD_REQUEST
+            detail = f"Google API Bad Request (check data format/values): {error_details}"
         elif status_code == 404:
-             http_status = status.HTTP_404_NOT_FOUND
-             detail = "Primary Google Calendar not found."
+            http_status = status.HTTP_404_NOT_FOUND
+            detail = "Primary Google Calendar not found."
 
         raise HTTPException(status_code=http_status, detail=detail)
 
