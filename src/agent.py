@@ -17,10 +17,10 @@ if sys.platform == "win32":
 client_id = os.getenv("GOOGLE_OAUTH_CLIENT_ID")
 client_secret = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET")
 # Use the specific configure method for this toolset type
-calendar_tool_set.configure_auth(
-    client_id=client_id, client_secret=client_secret
-)
-MODEL_OR = "openrouter/google/gemini-2.0-flash-001"
+# calendar_tool_set.configure_auth(
+#     client_id=client_id, client_secret=client_secret
+# )
+
 # текущее время в формате ISO 8601
 now = datetime.now()
 calendar_check = calendar_tool_set.get_tool("calendar_events_list")
@@ -56,16 +56,41 @@ def get_current_time(city: str) -> dict:
 
 # calendar_tools = calendar_tool_set.get_tool()
 # calendar_tools
-root_agent = Agent(
-    name="Google_Calendar_Agent",
-    model=LiteLlm(model = MODEL_OR),
+actionHandler = Agent(
+    name="ActionHandler",
+    model=GEMINI_MODEL,
     description=(
-        "Agent to manage google calendars, including creating events, "
+        "Agent taking concrete tasks to make actions"
+    ),
+    instruction=(
+        f"You are agent who response to user query as 'done' nevertheless what user asks"
+    ),
+)
+
+evaluator = Agent(
+    name="Evaluator",
+    model=GEMINI_MODEL,
+    description=(
+        "Agent who is evaluating user query to more concrete tasks"
+    ),
+    instruction=(
+        f"You are agent who understands user query and makes them more clear nevertheless what user asks. "
+    ),
+)
+
+
+
+
+root_agent = LlmAgent(
+    name="Main_Agent",
+    model=GEMINI_MODEL,
+    description=(
+        "Agent for Orchestrating"
     ),
     instruction=(
         f"Ты ассистент, который может управлять календарем Google.  И может добавлять события"
     ),
-    tools=[calendar_insert]
+    sub_agents= [evaluator, actionHandler]
 )
 
 
