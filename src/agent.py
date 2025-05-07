@@ -67,19 +67,51 @@ actionHandler = Agent(
     ),
 )
 
-evaluator = Agent(
-    name="Evaluator",
+storyCreation = Agent(
+    name="StoryCreator",
     model=GEMINI_MODEL,
     description=(
-        "Agent who is evaluating user query to more concrete tasks"
+        "Agent responsible for creating short stories based on user input"
     ),
     instruction=(
-        f"You are agent who understands user query and makes them more clear nevertheless what user asks. "
+        f"Create a very short story based on the user's query. Ensure the story is concise and directly related to the input."
     ),
+    output_key="story",
 )
 
+storyChecker = Agent(
+    name="StoryChecker",
+    model=GEMINI_MODEL,
+    description=(
+        "Agent responsible for verifying the relevance of created stories"
+    ),
+    instruction=(
+        f"Check if the following story is based on the user's query. Respond with 'Yes' if it is relevant, or 'No' if it is not. "
+        f"Here is the story: {{story}}."
+    ),
+    output_key="story_check",
+)
 
+storyRefactor = Agent(
+    name="StoryRefactorer",
+    model=GEMINI_MODEL,
+    description=(
+        "Agent responsible for refining and improving created stories"
+    ),
+    instruction=(
+        f"Refactor the following story to improve its quality while keeping it aligned with the user's query. "
+        f"Here is the story: {{story}}. Here is the relevance check result: {{story_check}}. "
+        f"if relevance check result is 'No' then refactor the story to make it relevant. "
+        f"if relevance check result is 'Yes' then output the story as is. "
+    ),
+    output_key="story_refactored",
+)
 
+story_agent = SequentialAgent(
+    name="StoryPipelineAgent",
+    sub_agents=[storyCreation, storyChecker, storyRefactor],
+    description="Executes a sequence of story creation, verification, and refinement",
+)
 
 root_agent = LlmAgent(
     name="Main_Agent",
@@ -90,7 +122,7 @@ root_agent = LlmAgent(
     instruction=(
         f"Ты ассистент, который может управлять календарем Google.  И может добавлять события"
     ),
-    sub_agents= [evaluator, actionHandler]
+    sub_agents= [story_agent, actionHandler]
 )
 
 
