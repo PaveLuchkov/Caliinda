@@ -107,7 +107,7 @@ root_agent = Agent(
     name="Google_Calendar_Agent",
     model=LiteLlm(model = MODEL_OR),
     description=(
-        "Agent to manage google calendars, including creating events, "
+        "Agent for Orchestrating"
     ),
     instruction=(
         f"You are a assistant that provides event list from Google Calendar On date using 'calendar_check_tool'"
