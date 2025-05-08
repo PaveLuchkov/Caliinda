@@ -47,15 +47,21 @@ from zoneinfo import ZoneInfo
 os.environ["PYTHONIOENCODING"] = "utf-8"
 os.environ["PYTHONUTF8"] = "1" #$env:PYTHONUTF8 = "1"
 MODEL_OR = "openrouter/google/gemini-2.0-flash-001"
-
+# Google ID: 113750652546884584889, Email: arrtalcompany@gmail.com, Full Name: Pasha, Refresh Token: 1//0ciww42VH1Ph9CgYIARAAGAwSNwF-L9IrPLobJ5vzzrx5mJfo9kcJkucYn3kPNl1AZhHde9e9CV42FfNRGazw0iKo-fZD85cl2sE, Created At: 2025-05-08 17:34:19.299923+00:00, Updated At: 2025-05-08 17:34:19.299923+00:00
 # --- ЗАХАРДКОЖЕННЫЕ ДАННЫЕ ДЛЯ ТЕСТА ---
 # !!! ЗАМЕНИ ЭТИ ЗНАЧЕНИЯ СВОИМИ РЕАЛЬНЫМИ ДАННЫМИ !!!
-TEST_USER_GOOGLE_ID = "112812348232829088110"
-TEST_USER_EMAIL = "sliderlaad222@gmail.com"
-HARDCODED_REFRESH_TOKEN = "1//0cvsbPdJWXduWCgYIARAAGAwSNwF-L9IrO1wnpaFzPQ7bp1O0gsiTE3qlv8cYqWyPMjYjHG6seTqX83R-WvUPUvbljzk9PCcKaIo" # !!! ЗАМЕНИ ЭТО !!!
-HARDCODED_SCOPES = ["https://www.googleapis.com/auth/calendar"]
+TEST_USER_GOOGLE_ID = "113750652546884584889"
+TEST_USER_EMAIL = "arrtalcompany@gmail.com"
+HARDCODED_REFRESH_TOKEN = "1//0ciww42VH1Ph9CgYIARAAGAwSNwF-L9IrPLobJ5vzzrx5mJfo9kcJkucYn3kPNl1AZhHde9e9CV42FfNRGazw0iKo-fZD85cl2sE" # !!! ЗАМЕНИ ЭТО !!!
+HARDCODED_SCOPES = [
+    'https://www.googleapis.com/auth/calendar',
+    'openid',
+    'https://www.googleapis.com/auth/userinfo.profile',
+    'https://www.googleapis.com/auth/userinfo.email'
+]
+
 TOKEN_URI = "https://oauth2.googleapis.com/token"
-HARDCODED_ACCESS_TOKEN = "ya29.a0AZYkNZgpig6NbDlleW8_9FDycGj5e6q5EtKYR-64kmZONJp4SM0VTgd6EPhJnEYDBoA9wldOqtABNimWNk4XhLONtOzx7GGilLU0HzCxc-XXS5IFiR2L_pXIoka6lI4WUJP7eBqCsSsAI_xh-RSkImWyPhzDZc-1aF__omTKaCgYKAW8SARQSFQHGX2MiKUY3LPQKbN-RLCb48ZBtCQ0175"
+# HARDCODED_ACCESS_TOKEN = "ya29.a0AZYkNZgpig6NbDlleW8_9FDycGj5e6q5EtKYR-64kmZONJp4SM0VTgd6EPhJnEYDBoA9wldOqtABNimWNk4XhLONtOzx7GGilLU0HzCxc-XXS5IFiR2L_pXIoka6lI4WUJP7eBqCsSsAI_xh-RSkImWyPhzDZc-1aF__omTKaCgYKAW8SARQSFQHGX2MiKUY3LPQKbN-RLCb48ZBtCQ0175"
 client_id = os.getenv("GOOGLE_OAUTH_CLIENT_ID")
 client_secret = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET")
 
@@ -75,9 +81,9 @@ user_auth_credential_with_access_token = AuthCredential(
     oauth2=OAuth2Auth(
         client_id=client_id,
         client_secret=client_secret,
-        access_token=HARDCODED_ACCESS_TOKEN,
-#         refresh_token=HARDCODED_REFRESH_TOKEN,
-#         token_uri=TOKEN_URI, 
+        # access_token=HARDCODED_ACCESS_TOKEN,
+        refresh_token=HARDCODED_REFRESH_TOKEN,
+        token_uri=TOKEN_URI, 
         scopes=HARDCODED_SCOPES,
     )
 )
