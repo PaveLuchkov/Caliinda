@@ -1,0 +1,89 @@
+
+
+
+
+# Use the specific configure method for this toolset type
+calendar_tool_set.configure_auth(
+    client_id=client_id, client_secret=client_secret
+)
+MODEL_OR = "openrouter/google/gemini-2.0-flash-001"
+calendar_check = calendar_tool_set.get_tool("calendar_events_list")
+logger.info(f"Tool '{calendar_check.name}' obtained.")
+
+rest_api_tool_inside = calendar_check.rest_api_tool # Доступ к внутреннему RestApiTool
+actual_auth_scheme_from_tool = rest_api_tool_inside.auth_scheme 
+
+
+if not actual_auth_scheme_from_tool:
+    logger.error("Не удалось извлечь auth_scheme из calendar_check.rest_api_tool.auth_scheme")
+    exit("Ошибка получения схемы аутентификации.")
+
+logger.info(f"Извлеченная auth_scheme из инструмента: {type(actual_auth_scheme_from_tool)}")
+
+
+auth_config_for_session_key = AuthConfig(
+    name="google_calendar_oidc_for_session_from_tool",
+    auth_scheme=actual_auth_scheme_from_tool, # <--- ПРОСТО ПЕРЕДАЕМ ГОТОВЫЙ ОБЪЕКТ СХЕМЫ
+    raw_auth_credential=AuthCredential(
+        auth_type=AuthCredentialTypes.OPEN_ID_CONNECT,
+        oauth2=OAuth2Auth(
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+    )
+)
+
+session_service = InMemorySessionService()
+
+root_agent = Agent(
+    name="calendar_check_agent_v2",
+    model=LiteLlm(model=MODEL_OR),
+    description="Provides event list from Google Calendar",
+    instruction="You are a assistant that provides event list from Google Calendar On date using 'calendar_check'",
+    tools=[calendar_check],
+)
+
+
+APP_NAME = "caliinda"
+USER_ID_FOR_SESSION = "112812348232829088110" # Используется GOOGLE ID sldierla
+SESSION_ID = "session_001" # Using a fixed ID for simplicity
+
+adk_user_session: ADKSession = session_service.get_session(
+    app_name=APP_NAME, user_id=USER_ID_FOR_SESSION, session_id=SESSION_ID
+)
+if not adk_user_session:
+    adk_user_session = session_service.create_session(
+        app_name=APP_NAME,
+        user_id=USER_ID_FOR_SESSION,
+        session_id=SESSION_ID
+    )
+logger.info(f"ADK Session ensured: App='{APP_NAME}', User='{USER_ID_FOR_SESSION}', Session ID='{SESSION_ID}'")
+
+
+user_credential_with_refresh_token = AuthCredential(
+    auth_type=AuthCredentialTypes.OPEN_ID_CONNECT, # Должен соответствовать auth_config_for_session_key
+    oauth2=OAuth2Auth(
+        client_id=client_id,                      # Нужен для процесса обновления токена
+        client_secret=client_secret,              # Нужен для процесса обновления токена
+        refresh_token=HARDCODED_REFRESH_TOKEN,    # НАШ REFRESH TOKEN
+        token_uri=TOKEN_URI,                      # Эндпоинт для обмена/обновления токена
+        scopes=HARDCODED_SCOPES,                  # Скоупы, для которых валиден refresh_token
+    )
+)
+logger.info(f"User AuthCredential with refresh token created for user '{USER_ID_FOR_SESSION}'.")
+
+# 4. Устанавливаем пользовательский credential в сессию, используя наш auth_config_for_session_key как ключ.
+adk_user_session.set_auth_credential(
+    auth_config=auth_config_for_session_key,        # Ключ, описывающий тип аутентификации
+    credential=user_credential_with_refresh_token # Учетные данные пользователя с refresh_token
+)
+
+runner = Runner(
+    agent=root_agent, # The agent we want to run
+    app_name=APP_NAME,   # Associates runs with our app
+    session_service=session_service # Uses our session manager
+)
+
+print(f"Runner created for agent '{runner.agent.name}'.")
+
+# what events are in my calendar for 08.05.2025?
