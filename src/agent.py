@@ -6,8 +6,7 @@ from google.adk.tools.google_api_tool import calendar_tool_set
 from google.adk.agents import Agent
 from google.adk.models.lite_llm import LiteLlm
 
-from src.tools.calendar_tools import calendar_check_tool
-
+from src.tools.calendar_tools import all_configured_calendar_tools
 import src.session as ses
 import src.shared.config as config 
 
@@ -20,6 +19,10 @@ os.environ["PYTHONIOENCODING"] = "utf-8"
 os.environ["PYTHONUTF8"] = "1" #$env:PYTHONUTF8 = "1"
 MODEL = LiteLlm(model = config.MODEL_OR)
 
+root_tools = []
+root_tools.append(all_configured_calendar_tools["calendar_events_list"])
+
+
 root_agent = Agent(
     name="Google_Calendar_Agent",
     model=MODEL,
@@ -29,7 +32,7 @@ root_agent = Agent(
     instruction=(
         f"You are a assistant that provides event list from Google Calendar On date using 'calendar_check_tool'"
     ),
-    tools=[calendar_check_tool]
+    tools=root_tools
 )
 
 runner = Runner(

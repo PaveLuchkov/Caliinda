@@ -1,6 +1,5 @@
 import logging
 from google.adk.sessions import InMemorySessionService, Session as ADKSession
-from src.tools.calendar_tools import calendar_check_tool
 
 import src.shared.config as cfg 
 
