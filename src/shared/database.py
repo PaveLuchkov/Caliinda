@@ -4,7 +4,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.sql import func as sql_func
 from contextlib import contextmanager
 import logging
-import shared.config as config 
+import src.shared.config as config 
 
 logger = logging.getLogger(__name__)
 
