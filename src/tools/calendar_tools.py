@@ -44,3 +44,6 @@ else:
         scopes=cfg.SCOPES
     )
 
+
+#  --- Tools ---
+event_list = all_configured_calendar_tools["calendar_events_list"]

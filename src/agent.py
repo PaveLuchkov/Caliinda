@@ -2,13 +2,12 @@ import os
 import logging
 
 from google.adk.runners import Runner # Пример
-from google.adk.tools.google_api_tool import calendar_tool_set
 from google.adk.agents import Agent
 from google.adk.models.lite_llm import LiteLlm
 
-from src.tools.calendar_tools import all_configured_calendar_tools
 import src.session as ses
 import src.shared.config as config 
+from .sub_agents import planner, calendar_action
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -17,11 +16,8 @@ logging.basicConfig(level=logging.INFO)
 
 os.environ["PYTHONIOENCODING"] = "utf-8"
 os.environ["PYTHONUTF8"] = "1" #$env:PYTHONUTF8 = "1"
+
 MODEL = LiteLlm(model = config.MODEL_OR)
-
-root_tools = []
-root_tools.append(all_configured_calendar_tools["calendar_events_list"])
-
 
 root_agent = Agent(
     name="Google_Calendar_Agent",
@@ -30,9 +26,9 @@ root_agent = Agent(
         "Agent for Orchestrating"
     ),
     instruction=(
-        f"You are a assistant that provides event list from Google Calendar On date using 'calendar_check_tool'"
+        f"You assistant. Delegate user query to planner if user wants to make plans and calendar_action if has concrete task to do in calendar"
     ),
-    tools=root_tools
+    sub_agents = [planner, calendar_action]
 )
 
 runner = Runner(
