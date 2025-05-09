@@ -4,15 +4,15 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.sql import func as sql_func
 from contextlib import contextmanager
 import logging
-import src.shared.config as config 
+from ..shared import config as cfg
 
 logger = logging.getLogger(__name__)
 
 try:
     # Используем DATABASE_URL из конфига
-    engine = create_engine(config.DATABASE_URL)
-    print(f"DEBUG: Connecting with User: {config.DB_USER}, Host: {config.DB_HOST}, Port: {config.DB_PORT}, DB: {config.DB_NAME}")
-    print(f"DEBUG: Password used: '{config.DB_PASSWORD}'") # Проверьте вывод этой строки!
+    engine = create_engine(cfg.DATABASE_URL)
+    print(f"DEBUG: Connecting with User: {cfg.DB_USER}, Host: {cfg.DB_HOST}, Port: {cfg.DB_PORT}, DB: {cfg.DB_NAME}")
+    print(f"DEBUG: Password used: '{cfg.DB_PASSWORD}'") # Проверьте вывод этой строки!
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     Base = declarative_base()
     logger.info("Database engine created successfully for local DB.")

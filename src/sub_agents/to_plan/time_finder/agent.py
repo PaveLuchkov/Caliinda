@@ -1,7 +1,7 @@
 from google.adk.agents import Agent
 from google.adk.models.lite_llm import LiteLlm
 
-import src.shared.config as cfg
+from ....shared import config as cfg
 
 MODEL = LiteLlm(model = cfg.MODEL_OR)
 from . import prompt

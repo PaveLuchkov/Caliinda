@@ -6,7 +6,7 @@ from google.adk.agents import Agent
 from google.adk.models.lite_llm import LiteLlm
 
 import src.session as ses
-import src.shared.config as config 
+from .shared import config as cfg
 from .sub_agents import planner, calendar_action
 
 logger = logging.getLogger(__name__)
@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 os.environ["PYTHONIOENCODING"] = "utf-8"
 os.environ["PYTHONUTF8"] = "1" #$env:PYTHONUTF8 = "1"
 
-MODEL = LiteLlm(model = config.MODEL_OR)
+MODEL = LiteLlm(model = cfg.MODEL_OR)
 
 root_agent = Agent(
     name="Google_Calendar_Agent",
