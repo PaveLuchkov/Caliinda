@@ -4,24 +4,25 @@ import logging
 from google.adk.runners import Runner # Пример
 from google.adk.agents import Agent
 from google.adk.models.lite_llm import LiteLlm
+import litellm
 
 import src.session as ses
 from .shared import config as cfg
 from .sub_agents import planner, calendar_action
+from src.tools.agent_to_tool import time_finder_tool
+from src.tools.calendar_tools import event_list
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# litellm._turn_on_debug()
+litellm._turn_on_debug()
 
 os.environ["PYTHONIOENCODING"] = "utf-8"
 os.environ["PYTHONUTF8"] = "1" #$env:PYTHONUTF8 = "1"
 
-MODEL = LiteLlm(model = cfg.MODEL_OR)
-
 root_agent = Agent(
     name="Google_Calendar_Agent",
-    model=MODEL,
+    model=cfg.MODEL,
     description=(
         "Agent for Orchestrating"
     ),

@@ -4,7 +4,7 @@ from google.adk.tools import agent_tool
 
 from ...shared import config as cfg
 
-MODEL = LiteLlm(model = cfg.MODEL_OR)
+MODEL = cfg.MODEL
 from . import prompt
 from src.tools.agent_to_tool import time_finder_tool
 

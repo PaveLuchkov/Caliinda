@@ -27,6 +27,7 @@ SCOPES = [
     'https://www.googleapis.com/auth/userinfo.email'
 ]
 MODEL_OR = "openrouter/google/gemini-2.0-flash-001"
+MODEL = "gemini-2.0-flash"
 # Google ID: 113750652546884584889, Email: arrtalcompany@gmail.com, Full Name: Pasha, Refresh Token: 1//0ciww42VH1Ph9CgYIARAAGAwSNwF-L9IrPLobJ5vzzrx5mJfo9kcJkucYn3kPNl1AZhHde9e9CV42FfNRGazw0iKo-fZD85cl2sE, Created At: 2025-05-08 17:34:19.299923+00:00, Updated At: 2025-05-08 17:34:19.299923+00:00
 # --- ЗАХАРДКОЖЕННЫЕ ДАННЫЕ ДЛЯ ТЕСТА ---
 TEST_USER_GOOGLE_ID = "113750652546884584889"
