@@ -1,6 +1,6 @@
 # fastapi_backend.py
 import datetime
-from fastapi import FastAPI, HTTPException, Depends, Header, Query, File, UploadFile, Form, status
+from fastapi import FastAPI, HTTPException, Depends, Header, Query, File, UploadFile, Form, status, Path, Response
 from fastapi.middleware.cors import CORSMiddleware
 from grpc import Status
 from mcp import Resource
@@ -619,6 +619,91 @@ async def create_calendar_event(
     except Exception as e:
         logger.error(f"Unexpected error inserting event for user {user_google_id}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error while creating event.")
+
+@app.delete(
+    "/calendar/events/{event_id}",
+    status_code=status.HTTP_204_NO_CONTENT, # Успешное удаление обычно возвращает 204
+    tags=["Calendar"],
+    summary="Delete a Google Calendar event",
+    responses={
+        # Коды ошибок похожи на create, но добавим 404
+        401: {"description": "Authentication failed (token issue)"},
+        403: {"description": "Forbidden (e.g., scope missing, user not in DB, cannot access this event)"},
+        404: {"description": "Event not found"}, # Событие с таким ID не найдено
+        500: {"description": "Internal server error"},
+        502: {"description": "Google API error"},
+    }
+)
+async def delete_calendar_event(
+    # Получаем event_id из пути
+    event_id: str = Path(..., description="The ID of the Google Calendar event to delete"),
+    # Стандартная проверка аутентификации и получение user_google_id
+    user_google_id: str = Depends(get_current_user_id),
+    # Получаем сессию БД для доступа к учетным данным
+    db: Session = Depends(get_db)
+):
+    """
+    Deletes a specific event from the user's primary Google Calendar.
+    Requires 'Authorization: Bearer <google_id_token>' header.
+    """
+    logger.info(f"Received request to DELETE event with ID: {event_id} for user {user_google_id}")
+
+    # 1. Получаем Credentials пользователя из БД (та же логика, что и в create/range)
+    creds = get_credentials_from_db_token(user_google_id, db)
+    if not creds:
+        logger.error(f"Could not retrieve/refresh valid Google credentials for user {user_google_id}.")
+        # Используем 403, т.к. пользователь аутентифицирован, но нет доступа к ресурсам Google
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Google Calendar access token invalid or revoked. Please sign in again.")
+
+    # 2. Вызов Google Calendar API для удаления события
+    try:
+        # Создаем клиент API (так же, как в create/range)
+        service: Resource = build('calendar', 'v3', credentials=creds)
+        logger.info(f"Attempting to DELETE event ID {event_id} for user {user_google_id} from primary calendar.")
+
+        # Выполняем запрос на удаление
+        # ВАЖНО: execute() для delete не возвращает тело ответа при успехе (возвращает None)
+        service.events().delete(
+            calendarId='primary', # Обычно удаляем из основного календаря
+            eventId=event_id      # ID события, которое нужно удалить
+        ).execute()
+
+        logger.info(f"Successfully DELETED event ID {event_id} for user {user_google_id}.")
+        # При успехе API вернет 204 No Content, и мы делаем то же самое
+        # Явно возвращаем Response со статусом 204
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    except HttpError as error:
+        # Обработка ошибок Google API (очень похожа на create_calendar_event)
+        error_details = getattr(error, 'content', b'').decode('utf-8')
+        status_code = error.resp.status if hasattr(error, 'resp') else 500
+        logger.error(f"Google API error deleting event {event_id} for user {user_google_id}: {status_code} - {error_details}", exc_info=True)
+
+        # Определяем статус FastAPI на основе ошибки Google
+        http_status = status.HTTP_502_BAD_GATEWAY
+        detail = f"Google API Error: {error_details}"
+
+        if status_code == 401:
+            http_status = status.HTTP_401_UNAUTHORIZED
+            detail = f"Google API Authentication Error: {error_details}"
+        elif status_code == 403:
+            http_status = status.HTTP_403_FORBIDDEN
+            detail = f"Google API Forbidden (Insufficient permissions?): {error_details}"
+        elif status_code == 404: # !!! ВАЖНО: Обрабатываем 404 от Google как 404 у нас
+            http_status = status.HTTP_404_NOT_FOUND
+            detail = f"Event with ID '{event_id}' not found in primary calendar or access denied."
+        elif status_code == 410: # Событие уже удалено (Gone)
+             logger.warning(f"Attempted to delete event {event_id} which is already gone (410). Treating as success.")
+             # Можно вернуть 204, так как желаемое состояние (события нет) достигнуто
+             return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+        raise HTTPException(status_code=http_status, detail=detail)
+
+    except Exception as e:
+        # Обработка других непредвиденных ошибок
+        logger.error(f"Unexpected error deleting event {event_id} for user {user_google_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error while deleting event.")
+
 
 
 # --- Root endpoint for testing ---
