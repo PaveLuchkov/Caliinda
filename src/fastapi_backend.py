@@ -9,6 +9,7 @@ import tempfile
 import os
 import logging
 from typing import Dict, List, Optional
+from enum import Enum
 
 # Google Auth Libraries
 from google.oauth2 import id_token, credentials
@@ -68,6 +69,8 @@ class CalendarEventResponse(BaseModel):
     isAllDay: bool
     description: Optional[str] = None
     location: Optional[str] = None
+    recurringEventId: Optional[str] = None
+    originalStartTime: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -112,6 +115,11 @@ class CreateEventResponse(BaseModel):
     status: str = "success"
     message: str = "Event created successfully"
     eventId: Optional[str] = Field(None, description="ID of the created Google Calendar event")
+
+class DeleteEventMode(str, Enum):
+    DEFAULT = "default"
+    INSTANCE_ONLY = "instance_only"
+    # ALL_SERIES = "all_series" # Можно использовать DEFAULT для этого
 
 # --- Initialize Handlers ---
 llm_handler_instance = LLMHandler()
@@ -637,6 +645,7 @@ async def create_calendar_event(
 async def delete_calendar_event(
     # Получаем event_id из пути
     event_id: str = Path(..., description="The ID of the Google Calendar event to delete"),
+    mode: DeleteEventMode = Query(DeleteEventMode.DEFAULT, description="Deletion mode"),
     # Стандартная проверка аутентификации и получение user_google_id
     user_google_id: str = Depends(get_current_user_id),
     # Получаем сессию БД для доступа к учетным данным
@@ -657,20 +666,42 @@ async def delete_calendar_event(
 
     # 2. Вызов Google Calendar API для удаления события
     try:
-        # Создаем клиент API (так же, как в create/range)
         service: Resource = build('calendar', 'v3', credentials=creds)
-        logger.info(f"Attempting to DELETE event ID {event_id} for user {user_google_id} from primary calendar.")
 
-        # Выполняем запрос на удаление
-        # ВАЖНО: execute() для delete не возвращает тело ответа при успехе (возвращает None)
-        service.events().delete(
-            calendarId='primary', # Обычно удаляем из основного календаря
-            eventId=event_id      # ID события, которое нужно удалить
-        ).execute()
+        if mode == DeleteEventMode.INSTANCE_ONLY:
+            logger.info(f"Attempting to cancel INSTANCE_ONLY for event ID {event_id}")
+            updated_event_body = {'status': 'cancelled'}
+            try:
+                service.events().patch(
+                    calendarId='primary',
+                    eventId=event_id,
+                    body=updated_event_body
+                ).execute()
+                logger.info(f"Successfully set status to 'cancelled' for event/instance {event_id}")
+            except HttpError as patch_error:
+                # Обработка ошибок patch, например, если это не экземпляр или нет прав
+                if patch_error.resp.status == 403 and "Recurring events instances can only be modified by organizers" in str(patch_error.content): # Пример ошибки
+                    logger.warning(f"Cannot cancel instance {event_id} (not organizer or not an instance): {patch_error.content.decode()}")
+                    # Можно вернуть ошибку клиенту или попытаться удалить как DEFAULT
+                    raise HTTPException(status_code=400, detail=f"Cannot cancel this event as a single instance. It might be a master event, or you are not the organizer.")
+                elif patch_error.resp.status == 404:
+                    logger.warning(f"Event {event_id} not found for INSTANCE_ONLY cancellation.")
+                    raise # Перебросить 404 для общей обработки
+                else:
+                    logger.error(f"Error patching event {event_id} for INSTANCE_ONLY: {patch_error.content.decode()}", exc_info=True)
+                    raise # Перебросить для общей обработки
+        elif mode == DeleteEventMode.DEFAULT:
+            logger.info(f"Attempting DEFAULT (or ALL_SERIES) delete for event ID {event_id}")
+            service.events().delete(
+                calendarId='primary',
+                eventId=event_id
+            ).execute()
+            logger.info(f"Successfully DELETED event ID {event_id} (DEFAULT mode).")
+        else:
+            # Обработка неизвестного режима, если такой возможен
+            logger.error(f"Unknown delete mode: {mode} for event {event_id}")
+            raise HTTPException(status_code=400, detail=f"Unknown delete mode: {mode}")
 
-        logger.info(f"Successfully DELETED event ID {event_id} for user {user_google_id}.")
-        # При успехе API вернет 204 No Content, и мы делаем то же самое
-        # Явно возвращаем Response со статусом 204
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     except HttpError as error:

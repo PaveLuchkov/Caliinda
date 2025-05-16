@@ -15,30 +15,45 @@ logger = logging.getLogger(__name__)
 # Это полезно для ясности того, что мы хотим получить
 class SimpleCalendarEvent:
     def __init__(self, id: str, summary: str, start_time: str, end_time: str,
-                 is_all_day: bool, # <--- ДОБАВЛЯЕМ isAllDay
-                 description: Optional[str] = None, location: Optional[str] = None):
+                 is_all_day: bool,
+                 description: Optional[str] = None,
+                 location: Optional[str] = None,
+                 # --- НОВЫЕ ПАРАМЕТРЫ В __init__ ---
+                 recurring_event_id: Optional[str] = None,
+                 original_start_time: Optional[str] = None):
         self.id = id
         self.summary = summary
-        self.startTime = start_time  # Используем camelCase
+        # Используем camelCase для атрибутов, если это твой стиль для словаря to_dict
+        # Но если CalendarEventResponse ожидает startTime, endTime, isAllDay, то оставляем так.
+        # Судя по твоему to_dict, ты используешь startTime, endTime, isAllDay.
+        self.startTime = start_time
         self.endTime = end_time
-        self.isAllDay = is_all_day # Используем camelCase
+        self.isAllDay = is_all_day
         self.description = description
         self.location = location
+        # --- СОХРАНЯЕМ КАК АТРИБУТЫ ЭКЗЕМПЛЯРА ---
+        self.recurringEventId = recurring_event_id
+        self.originalStartTime = original_start_time
 
-    def to_dict(self):
-        return {
+    def to_dict(self) -> Dict[str, Any]: # Явно указываем тип возвращаемого значения
+        data = {
             "id": self.id,
             "summary": self.summary,
-            "startTime": self.startTime,
-            "endTime": self.endTime,
-            "isAllDay": self.isAllDay, # <--- ДОБАВЛЯЕМ в словарь
+            "startTime": self.startTime, # Убедись, что это startTime, а не self.start_time
+            "endTime": self.endTime,   # Аналогично
+            "isAllDay": self.isAllDay,
             "description": self.description,
             "location": self.location,
+            "recurringEventId": self.recurringEventId,
+            "originalStartTime": self.originalStartTime
         }
+        # Убираем ключи со значением None, если это требуется (FastAPI часто делает это сам для Optional полей)
+        return {k: v for k, v in data.items() if v is not None}
 
-    def __repr__(self): # Добавим для отладки
+    def __repr__(self):
         return (f"SimpleCalendarEvent(id='{self.id}', summary='{self.summary}', "
-                f"start='{self.startTime}', end='{self.endTime}', isAllDay={self.isAllDay})")
+                f"start='{self.startTime}', end='{self.endTime}', isAllDay={self.isAllDay}, "
+                f"recurringEventId='{self.recurringEventId}', originalStartTime='{self.originalStartTime}')")
 
 def get_events_for_date(creds: Credentials, target_date: datetime.date) -> list[SimpleCalendarEvent]:
     """
@@ -88,20 +103,26 @@ def get_events_for_date(creds: Credentials, target_date: datetime.date) -> list[
 
         logger.info(f"Found {len(all_items)} events for {target_date.isoformat()}.")
 
-        for event in all_items:
-            start_info = event.get('start', {})
-            end_info = event.get('end', {})
+        for event_item in all_items:
+            start_info = event_item.get('start', {})
+            end_info = event_item.get('end', {})
 
             # --- ОПРЕДЕЛЕНИЕ is_all_day ---
             is_all_day_event = 'date' in start_info and 'dateTime' not in start_info
-            logger.info(f"Event: {event.get('summary')}, ID: {event.get('id')}, start_info: {start_info}, is_all_day_event: {is_all_day_event}")
+            logger.info(f"Event: {event_item.get('summary')}, ID: {event_item.get('id')}, start_info: {start_info}, is_all_day_event: {is_all_day_event}")
             # --------------------------------
-
+            recurring_event_id_val = event_item.get('recurringEventId') # Используем другое имя переменной
+            original_start_time_data = event_item.get('originalStartTime')
+            original_start_time_str_val = None # Используем другое имя переменной
+            if original_start_time_data:
+                original_start_time_str_val = original_start_time_data.get('dateTime') or \
+                                            original_start_time_data.get('date')
+                
             start_time_str = start_info.get('dateTime', start_info.get('date'))
             end_time_str = end_info.get('dateTime', end_info.get('date'))
 
             if not start_time_str:
-                logger.warning(f"Skipping event without start time: {event.get('summary')} (ID: {event.get('id')})")
+                logger.warning(f"Skipping event without start time: {event_item.get('summary')} (ID: {event_item.get('id')})")
                 continue
 
             # Обработка отсутствующего времени конца
@@ -111,23 +132,25 @@ def get_events_for_date(creds: Credentials, target_date: datetime.date) -> list[
                          start_date_obj = datetime.date.fromisoformat(start_time_str)
                          end_date_obj = start_date_obj + datetime.timedelta(days=1)
                          end_time_str = end_date_obj.isoformat()
-                         logger.warning(f"All-day event without end date: {event.get('summary')} (ID: {event.get('id')}). Calculated end date.")
+                         logger.warning(f"All-day event without end date: {event_item.get('summary')} (ID: {event_item.get('id')}). Calculated end date.")
                     except ValueError:
-                         logger.error(f"Could not parse start date '{start_time_str}' for all-day event {event.get('id')} to calculate end date. Using start date.")
+                         logger.error(f"Could not parse start date '{start_time_str}' for all-day event {event_item.get('id')} to calculate end date. Using start date.")
                          end_time_str = start_time_str
                 else:
                     end_time_str = start_time_str
-                    logger.warning(f"Timed event without end time: {event.get('summary')} (ID: {event.get('id')}). Using start time as end time.")
+                    logger.warning(f"Timed event without end time: {event_item.get('summary')} (ID: {event_item.get('id')}). Using start time as end time.")
 
             # Создаем объект с флагом is_all_day
             simple_event = SimpleCalendarEvent(
-                id=event.get('id'),
-                summary=event.get('summary', 'Без названия'),
+                id=event_item.get('id'),
+                summary=event_item.get('summary', 'Без названия'),
                 start_time=start_time_str,
                 end_time=end_time_str,
                 is_all_day=is_all_day_event, # <--- ПЕРЕДАЕМ ФЛАГ
-                description=event.get('description'),
-                location=event.get('location')
+                description=event_item.get('description'),
+                location=event_item.get('location'),
+                recurring_event_id=recurring_event_id_val,    # Имя аргумента в __init__
+                original_start_time=original_start_time_str_val # Имя аргумента в __init__
             )
             events_list.append(simple_event)
 
@@ -193,20 +216,24 @@ def get_events_for_range(creds: Credentials, start_date: datetime.date, end_date
         logger.info(f"Found {len(all_items)} events for range {start_date.isoformat()} to {end_date.isoformat()}.")
 
         # --- НАЧАЛО ЦИКЛА ОБРАБОТКИ (ИДЕНТИЧНО get_events_for_date) ---
-        for event in all_items:
-            start_info = event.get('start', {})
-            end_info = event.get('end', {})
-
-            # --- ОПРЕДЕЛЕНИЕ is_all_day ---
+        for event_item in all_items: # Переименовал event в event_item, чтобы не конфликтовать с модулем event
+            start_info = event_item.get('start', {})
+            end_info = event_item.get('end', {})
             is_all_day_event = 'date' in start_info and 'dateTime' not in start_info
-            logger.info(f"Event: {event.get('summary')}, ID: {event.get('id')}, start_info: {start_info}, is_all_day_event: {is_all_day_event}")
+            # --- ИЗВЛЕКАЕМ НОВЫЕ ПОЛЯ ---
+            recurring_event_id = event_item.get('recurringEventId')
+            original_start_time_data = event_item.get('originalStartTime')
+            original_start_time_str = None
+            if original_start_time_data:
+                original_start_time_str = original_start_time_data.get('dateTime') or \
+                                        original_start_time_data.get('date')
             # --------------------------------
 
             start_time_str = start_info.get('dateTime', start_info.get('date'))
             end_time_str = end_info.get('dateTime', end_info.get('date'))
 
             if not start_time_str:
-                logger.warning(f"Skipping event without start time: {event.get('summary')} (ID: {event.get('id')})")
+                logger.warning(f"Skipping event without start time: {event_item.get('summary')} (ID: {event_item.get('id')})")
                 continue
 
             if not end_time_str:
@@ -215,23 +242,27 @@ def get_events_for_range(creds: Credentials, start_date: datetime.date, end_date
                          start_date_obj = datetime.date.fromisoformat(start_time_str)
                          end_date_obj = start_date_obj + datetime.timedelta(days=1)
                          end_time_str = end_date_obj.isoformat()
-                         logger.warning(f"All-day event without end date: {event.get('summary')} (ID: {event.get('id')}). Calculated end date.")
+                         logger.warning(f"All-day event without end date: {event_item.get('summary')} (ID: {event_item.get('id')}). Calculated end date.")
                     except ValueError:
-                         logger.error(f"Could not parse start date '{start_time_str}' for all-day event {event.get('id')} to calculate end date. Using start date.")
+                         logger.error(f"Could not parse start date '{start_time_str}' for all-day event {event_item.get('id')} to calculate end date. Using start date.")
                          end_time_str = start_time_str
                 else:
                     end_time_str = start_time_str
-                    logger.warning(f"Timed event without end time: {event.get('summary')} (ID: {event.get('id')}). Using start time as end time.")
+                    logger.warning(f"Timed event without end time: {event_item.get('summary')} (ID: {event_item.get('id')}). Using start time as end time.")
 
             # Создаем объект с флагом is_all_day
             simple_event = SimpleCalendarEvent(
-                id=event.get('id'),
-                summary=event.get('summary', 'Без названия'),
+                id=event_item.get('id'),
+                summary=event_item.get('summary', 'Без названия'),
                 start_time=start_time_str,
                 end_time=end_time_str,
-                is_all_day=is_all_day_event, # <--- ПЕРЕДАЕМ ФЛАГ
-                description=event.get('description'),
-                location=event.get('location')
+                is_all_day=is_all_day_event,
+                description=event_item.get('description'),
+                location=event_item.get('location'),
+                # --- ПЕРЕДАЕМ НОВЫЕ ПОЛЯ ---
+                recurring_event_id=recurring_event_id,       # Правильное имя аргумента
+                original_start_time=original_start_time_str  # Правильное имя аргумента
+                # -------------------------
             )
             events_list.append(simple_event)
         # --- КОНЕЦ ЦИКЛА ОБРАБОТКИ ---
