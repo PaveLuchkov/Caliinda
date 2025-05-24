@@ -24,7 +24,7 @@ import src.database as db_utils # Функции для работы с БД (ge
 from sqlalchemy.orm import Session # Тип для сессии БД
 from src.llm_handler import LLMHandler
 from src.calendar_integration import get_events_for_date, SimpleCalendarEvent, get_events_for_range
-from src.speech_to_text import recognize_speech
+# from src.speech_to_text import recognize_speech
 from src.orchestrator import Orchestrator
 import src.redis_cache as redis
 from pydantic import BaseModel, Field, field_validator
@@ -446,29 +446,30 @@ async def process_unified_request(
 
             # Используем безопасный временный файл
             # Важно: убедись, что система имеет права на запись в директорию временных файлов
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as tmp: # Уточни суффикс
-                try:
-                    content = await audio.read()
-                    if not content: raise HTTPException(status_code=400, detail="Empty audio file.")
-                    tmp.write(content)
-                    temp_audio_path = tmp.name
-                except Exception as read_err:
-                    logger.error(f"Error reading/writing audio file: {read_err}", exc_info=True)
-                    raise HTTPException(status_code=500, detail="Error processing uploaded audio file.")
-            logger.info(f"Audio saved to temp file: {temp_audio_path}")
+            # with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as tmp: # Уточни суффикс
+            #     try:
+            #         content = await audio.read()
+            #         if not content: raise HTTPException(status_code=400, detail="Empty audio file.")
+            #         tmp.write(content)
+            #         temp_audio_path = tmp.name
+            #     except Exception as read_err:
+            #         logger.error(f"Error reading/writing audio file: {read_err}", exc_info=True)
+            #         raise HTTPException(status_code=500, detail="Error processing uploaded audio file.")
+            # logger.info(f"Audio saved to temp file: {temp_audio_path}")
 
-            # Вызов функции распознавания речи (из speech.py)
-            try:
-                recognized_text = recognize_speech(temp_audio_path)
-            except Exception as stt_err:
-                 logger.error(f"Speech recognition failed: {stt_err}", exc_info=True)
-                 raise HTTPException(status_code=500, detail=f"Speech recognition service error: {stt_err}")
+            # # Вызов функции распознавания речи (из speech.py)
+            # try:
+            #     recognized_text = recognize_speech(temp_audio_path)
+            # except Exception as stt_err:
+            #      logger.error(f"Speech recognition failed: {stt_err}", exc_info=True)
+            #      raise HTTPException(status_code=500, detail=f"Speech recognition service error: {stt_err}")
 
-            if not recognized_text or not recognized_text.strip():
-                logger.warning(f"STT result empty for user {user_google_id}")
-                raise HTTPException(status_code=400, detail="Speech recognition failed or result is empty.")
-            input_text = recognized_text.strip()
-            logger.info(f"Recognized text: '{input_text}'")
+            # if not recognized_text or not recognized_text.strip():
+            #     logger.warning(f"STT result empty for user {user_google_id}")
+            #     raise HTTPException(status_code=400, detail="Speech recognition failed or result is empty.")
+            # input_text = recognized_text.strip()
+            # logger.info(f"Recognized text: '{input_text}'")
+            raise HTTPException(status_code=400, detail="Audio processing is temporarily disabled. Please use text input.")
         elif text:
             if not text.strip(): raise HTTPException(status_code=400, detail="Empty text input.")
             input_text = text.strip()
