@@ -35,6 +35,8 @@ else:
     all_possible_calendar_tool_names = [
         "calendar_events_list",
         "calendar_events_insert",
+        "calendar_events_update",
+        "calendar_events_delete",
     ]
     all_configured_calendar_tools = configure_calendar_tools(
         tool_names=all_possible_calendar_tool_names,
@@ -47,3 +49,6 @@ else:
 
 #  --- Tools ---
 event_list = all_configured_calendar_tools["calendar_events_list"]
+insert = all_configured_calendar_tools["calendar_events_insert"]
+edit = all_configured_calendar_tools["calendar_events_update"]
+delete = all_configured_calendar_tools["calendar_events_delete"]
