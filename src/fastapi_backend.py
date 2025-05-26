@@ -2,14 +2,13 @@
 import datetime
 from fastapi import FastAPI, HTTPException, Depends, Header, Query, File, UploadFile, Form, status, Path, Response
 from fastapi.middleware.cors import CORSMiddleware
-from grpc import Status
 from mcp import Resource
 from pydantic import BaseModel
-import tempfile
 import os
 import logging
 from typing import Dict, List, Optional
 from enum import Enum
+from dateutil.parser import isoparse
 
 # Google Auth Libraries
 from google.oauth2 import id_token, credentials
@@ -109,6 +108,30 @@ class CreateEventRequest(BaseModel):
         if start_time and v < start_time: # Простое строковое сравнение (ненадежно)
             logger.warning(f"Validation warning: endTime '{v}' might be before startTime '{start_time}'. Allowing for now.")
         return v
+    
+class UpdateEventRequest(BaseModel):
+    summary: Optional[str] = Field(None, min_length=1, description="Event title")
+    startTime: Optional[str] = Field(None, description="New start time in ISO 8601 format (date or datetime)")
+    endTime: Optional[str] = Field(None, description="New end time in ISO 8601 format (date or datetime)")
+    isAllDay: Optional[bool] = Field(None, description="Flag indicating if the event is all-day")
+    timeZoneId: Optional[str] = Field(None, description="Time zone ID for non-all-day events") # Важно, если меняется время
+    description: Optional[str] = Field(None, description="Optional event description")
+    location: Optional[str] = Field(None, description="Optional event location")
+    # Редактирование правил повторения - сложная тема, пока можно ее опустить или сделать очень базовой
+    # recurrence: Optional[List[str]] = Field(None, description="New recurrence rules")
+    # attendees: Optional[List[str]] = Field(None, description="List of attendee emails") # Если поддерживаешь
+
+class EventUpdateMode(str, Enum):
+    SINGLE_INSTANCE = "single_instance"       # Редактировать только этот экземпляр
+    ALL_IN_SERIES = "all_in_series"         # Редактировать всю серию (мастер-событие)
+    THIS_AND_FOLLOWING = "this_and_following" # Редактировать этот и последующие (самый сложный)
+
+# Модель ответа можно сделать похожей на CreateEventResponse или просто успешный статус
+class UpdateEventResponse(BaseModel):
+    status: str = "success"
+    message: str = "Event updated successfully"
+    eventId: str # ID обновленного события (может измениться, если создается исключение)
+    updatedFields: List[str] # Какие поля были фактически обновлены (опционально, для отладки)
 
 # Модель ответа при успешном создании события
 class CreateEventResponse(BaseModel):
@@ -736,7 +759,170 @@ async def delete_calendar_event(
         logger.error(f"Unexpected error deleting event {event_id} for user {user_google_id}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error while deleting event.")
 
+@app.patch( # Используем PATCH для частичного обновления
+    "/calendar/events/{event_id}",
+    response_model=UpdateEventResponse, # Или другая модель ответа
+    tags=["Calendar"],
+    summary="Update an existing Google Calendar event",
+    # ... (добавь responses)
+)
+async def update_calendar_event(
+    event_id: str = Path(..., description="ID of the event to update"),
+    # Данные для обновления приходят в теле запроса
+    event_data: UpdateEventRequest = Body(...),
+    # Режим обновления для повторяющихся событий
+    update_mode: EventUpdateMode = Query(..., description="Update mode for recurring events"), # Сделаем обязательным
+    user_google_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db)
+):
+    logger.info(f"Request to UPDATE event ID: {event_id} with mode: {update_mode}. Data: {event_data.model_dump(exclude_unset=True)}")
+    creds = get_credentials_from_db_token(user_google_id, db)
+    if not creds:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Google Calendar access token invalid or revoked. Please sign in again.")
 
+    service: Resource = build('calendar', 'v3', credentials=creds)
+
+    # 1. Формируем тело запроса для Google API только из тех полей, что пришли
+    google_event_body = {}
+    updated_fields_tracker = [] # Для ответа
+
+    if event_data.summary is not None:
+        google_event_body['summary'] = event_data.summary
+        updated_fields_tracker.append('summary')
+    if event_data.description is not None:
+        google_event_body['description'] = event_data.description
+        updated_fields_tracker.append('description')
+    if event_data.location is not None:
+        google_event_body['location'] = event_data.location
+        updated_fields_tracker.append('location')
+
+    # Обработка времени и isAllDay - самая сложная часть
+    # Нужно учитывать текущее состояние isAllDay события и новое
+    if event_data.startTime is not None or event_data.endTime is not None or event_data.isAllDay is not None:
+        # Если меняется что-то из этого, лучше запросить текущее событие, чтобы понять его тип
+        try:
+            current_event = service.events().get(calendarId='primary', eventId=event_id).execute()
+            current_start = current_event.get('start', {})
+            current_end = current_event.get('end', {})
+            current_is_all_day = 'date' in current_start and 'dateTime' not in current_start
+        except HttpError as e:
+            if e.resp.status == 404:
+                raise HTTPException(status_code=404, detail=f"Event {event_id} not found to update.")
+            raise HTTPException(status_code=502, detail=f"Could not fetch current event details: {e.content.decode()}")
+
+        new_is_all_day = event_data.isAllDay if event_data.isAllDay is not None else current_is_all_day
+
+        start_update = {}
+        end_update = {}
+
+        if new_is_all_day:
+            # Если становится или остается all-day
+            if event_data.startTime: # Новое время начала (только дата)
+                start_update['date'] = event_data.startTime
+                updated_fields_tracker.append('startTime')
+            elif event_data.isAllDay is not None and not current_is_all_day : # Переключаемся на all-day, берем дату из текущего dateTime
+                 start_update['date'] = isoparse(current_start.get('dateTime')).date().isoformat()
+
+            if event_data.endTime: # Новое время конца (только дата)
+                end_update['date'] = event_data.endTime
+                updated_fields_tracker.append('endTime')
+            elif event_data.isAllDay is not None and not current_is_all_day :
+                 end_update['date'] = (isoparse(current_start.get('dateTime')).date() + datetime.timedelta(days=1)).isoformat() # Пример
+            
+            if start_update: google_event_body['start'] = start_update
+            if end_update: google_event_body['end'] = end_update
+            if event_data.isAllDay is not None: updated_fields_tracker.append('isAllDay')
+
+        else: # НЕ all-day (со временем)
+            tz_id = event_data.timeZoneId or current_event.get('start', {}).get('timeZone') # Берем новую или текущую таймзону
+            if not tz_id and (event_data.startTime or event_data.endTime): # Нужна таймзона для dateTime
+                raise HTTPException(status_code=400, detail="timeZoneId is required when updating startTime/endTime for non-all-day events.")
+
+            if event_data.startTime:
+                start_update['dateTime'] = event_data.startTime
+                if tz_id: start_update['timeZone'] = tz_id
+                updated_fields_tracker.append('startTime')
+            elif event_data.isAllDay is not None and current_is_all_day : # Переключаемся с all-day на timed
+                 start_update['dateTime'] = isoparse(current_start.get('date')).isoformat() + "T09:00:00" # Пример, ставим 9 утра
+                 if tz_id: start_update['timeZone'] = tz_id
+
+
+            if event_data.endTime:
+                end_update['dateTime'] = event_data.endTime
+                if tz_id: end_update['timeZone'] = tz_id
+                updated_fields_tracker.append('endTime')
+            elif event_data.isAllDay is not None and current_is_all_day :
+                 end_update['dateTime'] = isoparse(current_start.get('date')).isoformat() + "T10:00:00" # Пример, ставим 10 утра
+                 if tz_id: end_update['timeZone'] = tz_id
+
+            if start_update: google_event_body['start'] = start_update
+            if end_update: google_event_body['end'] = end_update
+            if event_data.isAllDay is not None: updated_fields_tracker.append('isAllDay')
+            if event_data.timeZoneId is not None: updated_fields_tracker.append('timeZoneId')
+
+    if not google_event_body:
+        logger.info(f"No fields to update for event {event_id}.")
+        # Можно вернуть 304 Not Modified или просто успешный ответ без изменений
+        return UpdateEventResponse(eventId=event_id, message="No fields to update.", updatedFields=[])
+
+    # 2. Выполняем обновление в Google Calendar API
+    try:
+        target_event_id_for_api_call = event_id
+
+        if update_mode == EventUpdateMode.ALL_IN_SERIES:
+            logger.info(f"Processing ALL_IN_SERIES for event {event_id}.")
+            # Чтобы обновить ВСЮ СЕРИЮ, нам нужен ID мастер-события.
+            # Если event_id, переданный клиентом, уже является ID мастер-события, то все хорошо.
+            # Если event_id - это ID экземпляра, нам нужно получить его recurringEventId.
+            try:
+                current_event_instance = service.events().get(calendarId='primary', eventId=event_id).execute()
+                master_id = current_event_instance.get('recurringEventId')
+                if master_id:
+                    logger.info(f"Event {event_id} is an instance. Master ID for ALL_IN_SERIES update is {master_id}.")
+                    target_event_id_for_api_call = master_id
+                else:
+                    # Если нет recurringEventId, значит, event_id - это либо одиночное событие,
+                    # либо уже мастер-событие. В обоих случаях используем event_id.
+                    logger.info(f"Event {event_id} is likely a master or single event. Using it for ALL_IN_SERIES update.")
+                    target_event_id_for_api_call = event_id # Остается event_id
+            except HttpError as e:
+                if e.resp.status == 404:
+                    raise HTTPException(status_code=404, detail=f"Event {event_id} not found to determine master ID for ALL_IN_SERIES update.")
+                logger.error(f"API error getting event {event_id} for ALL_IN_SERIES: {e.content.decode()}", exc_info=True)
+                raise HTTPException(status_code=502, detail=f"Could not fetch event details for ALL_IN_SERIES update: {e.content.decode()}")
+            
+            logger.info(f"Targeting master event {target_event_id_for_api_call} for ALL_IN_SERIES update.")
+
+        elif update_mode == EventUpdateMode.SINGLE_INSTANCE:
+            # event_id должен быть ID конкретного экземпляра. Patch на него создаст исключение.
+            logger.info(f"Updating SINGLE_INSTANCE for event ID: {target_event_id_for_api_call}")
+            # Ничего дополнительно делать с ID не нужно, используем event_id как есть.
+
+        elif update_mode == EventUpdateMode.THIS_AND_FOLLOWING:
+            logger.error(f"Update mode THIS_AND_FOLLOWING is not yet supported for event {event_id}.")
+            raise HTTPException(status_code=501, detail="Update mode 'this_and_following' is not yet supported.")
+
+        updated_event = service.events().patch(
+            calendarId='primary',
+            eventId=target_event_id_for_api_call, # ID события или экземпляра
+            body=google_event_body
+        ).execute()
+
+        logger.info(f"Successfully UPDATED event ID: {updated_event.get('id')}. Mode: {update_mode}")
+        return UpdateEventResponse(eventId=updated_event.get('id'), updatedFields=updated_fields_tracker)
+
+    except HttpError as error:
+        # ... (обработка HttpError, аналогично delete_calendar_event) ...
+        logger.error(f"Google API error updating event {event_id}: {error.resp.status} - {error.content.decode()}", exc_info=True)
+        # ... (код для HTTPException) ...
+        if error.resp.status == 404:
+            raise HTTPException(status_code=404, detail=f"Event with ID '{event_id}' not found or not accessible.")
+        # ...
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Google API Error: {error.content.decode()}")
+    except Exception as e:
+        # ... (обработка Exception) ...
+        logger.error(f"Unexpected error updating event {event_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error while updating event.")
 
 # --- Root endpoint for testing ---
 @app.get("/", tags=["Status"])
