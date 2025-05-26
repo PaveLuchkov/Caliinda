@@ -20,22 +20,26 @@ class SimpleCalendarEvent:
                  location: Optional[str] = None,
                  # --- НОВЫЕ ПАРАМЕТРЫ В __init__ ---
                  recurring_event_id: Optional[str] = None,
-                 original_start_time: Optional[str] = None):
+                 original_start_time: Optional[str] = None,
+                 recurrence: Optional[List[str]] = None):
         self.id = id
         self.summary = summary
-        # Используем camelCase для атрибутов, если это твой стиль для словаря to_dict
-        # Но если CalendarEventResponse ожидает startTime, endTime, isAllDay, то оставляем так.
-        # Судя по твоему to_dict, ты используешь startTime, endTime, isAllDay.
         self.startTime = start_time
         self.endTime = end_time
         self.isAllDay = is_all_day
         self.description = description
         self.location = location
-        # --- СОХРАНЯЕМ КАК АТРИБУТЫ ЭКЗЕМПЛЯРА ---
         self.recurringEventId = recurring_event_id
         self.originalStartTime = original_start_time
+        self.recurrence_list = recurrence
 
     def to_dict(self) -> Dict[str, Any]: # Явно указываем тип возвращаемого значения
+        main_rrule = None
+        if self.recurrence_list:
+            for rule_str in self.recurrence_list:
+                if rule_str.startswith("RRULE:"):
+                    main_rrule = rule_str # Берем первую найденную RRULE
+                    break
         data = {
             "id": self.id,
             "summary": self.summary,
@@ -45,7 +49,8 @@ class SimpleCalendarEvent:
             "description": self.description,
             "location": self.location,
             "recurringEventId": self.recurringEventId,
-            "originalStartTime": self.originalStartTime
+            "originalStartTime": self.originalStartTime,
+            "recurrenceRule": main_rrule
         }
         # Убираем ключи со значением None, если это требуется (FastAPI часто делает это сам для Optional полей)
         return {k: v for k, v in data.items() if v is not None}
@@ -53,7 +58,8 @@ class SimpleCalendarEvent:
     def __repr__(self):
         return (f"SimpleCalendarEvent(id='{self.id}', summary='{self.summary}', "
                 f"start='{self.startTime}', end='{self.endTime}', isAllDay={self.isAllDay}, "
-                f"recurringEventId='{self.recurringEventId}', originalStartTime='{self.originalStartTime}')")
+                f"recurringEventId='{self.recurringEventId}', originalStartTime='{self.originalStartTime}')"
+                f", recurrence={self.recurrence})")
 
 def get_events_for_date(creds: Credentials, target_date: datetime.date) -> list[SimpleCalendarEvent]:
     """
@@ -117,7 +123,7 @@ def get_events_for_date(creds: Credentials, target_date: datetime.date) -> list[
             if original_start_time_data:
                 original_start_time_str_val = original_start_time_data.get('dateTime') or \
                                             original_start_time_data.get('date')
-                
+                    
             start_time_str = start_info.get('dateTime', start_info.get('date'))
             end_time_str = end_info.get('dateTime', end_info.get('date'))
 
@@ -170,6 +176,8 @@ def get_events_for_range(creds: Credentials, start_date: datetime.date, end_date
     Includes the 'isAllDay' flag.
     """
     events_list = []
+    master_events_cache: Dict[str, Dict[Any, Any]] = {}
+
     if start_date > end_date:
         logger.warning(f"Start date {start_date} is after end date {end_date}. Returning empty list.")
         return []
@@ -228,7 +236,25 @@ def get_events_for_range(creds: Credentials, start_date: datetime.date, end_date
                 original_start_time_str = original_start_time_data.get('dateTime') or \
                                         original_start_time_data.get('date')
             # --------------------------------
+            master_recurrence_rules: Optional[List[str]] = event_item.get('recurrence') # Для событий, которые УЖЕ мастера (если singleEvents=False)
+                                                                                        # или если API как-то вернул их для экземпляра (маловероятно)
 
+            if recurring_event_id and not master_recurrence_rules: # Если это экземпляр и у него нет своих правил
+                # Пытаемся получить правила из мастер-события
+                if recurring_event_id in master_events_cache:
+                    master_event_details = master_events_cache[recurring_event_id]
+                    logger.debug(f"Using cached master event details for master ID: {recurring_event_id}")
+                else:
+                    try:
+                        logger.debug(f"Fetching master event details for master ID: {recurring_event_id}")
+                        master_event_details = service.events().get(calendarId='primary', eventId=recurring_event_id).execute()
+                        master_events_cache[recurring_event_id] = master_event_details # Кэшируем
+                    except HttpError as e:
+                        logger.error(f"Could not fetch master event {recurring_event_id} for instance {event_item.get('id')}: {e}")
+                        master_event_details = None # Не удалось получить мастера
+
+                if master_event_details:
+                    master_recurrence_rules = master_event_details.get('recurrence') # Берем recurrence из мастера
             start_time_str = start_info.get('dateTime', start_info.get('date'))
             end_time_str = end_info.get('dateTime', end_info.get('date'))
 
@@ -261,7 +287,8 @@ def get_events_for_range(creds: Credentials, start_date: datetime.date, end_date
                 location=event_item.get('location'),
                 # --- ПЕРЕДАЕМ НОВЫЕ ПОЛЯ ---
                 recurring_event_id=recurring_event_id,       # Правильное имя аргумента
-                original_start_time=original_start_time_str  # Правильное имя аргумента
+                original_start_time=original_start_time_str,  # Правильное имя аргумента
+                recurrence=master_recurrence_rules
                 # -------------------------
             )
             events_list.append(simple_event)

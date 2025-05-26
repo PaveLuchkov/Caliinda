@@ -70,6 +70,7 @@ class CalendarEventResponse(BaseModel):
     location: Optional[str] = None
     recurringEventId: Optional[str] = None
     originalStartTime: Optional[str] = None
+    recurrenceRule: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -118,7 +119,7 @@ class UpdateEventRequest(BaseModel):
     description: Optional[str] = Field(None, description="Optional event description")
     location: Optional[str] = Field(None, description="Optional event location")
     # Редактирование правил повторения - сложная тема, пока можно ее опустить или сделать очень базовой
-    # recurrence: Optional[List[str]] = Field(None, description="New recurrence rules")
+    recurrence: Optional[List[str]] = Field(None, description="New recurrence rules")
     # attendees: Optional[List[str]] = Field(None, description="List of attendee emails") # Если поддерживаешь
 
 class EventUpdateMode(str, Enum):
@@ -129,7 +130,7 @@ class EventUpdateMode(str, Enum):
 # Модель ответа можно сделать похожей на CreateEventResponse или просто успешный статус
 class UpdateEventResponse(BaseModel):
     status: str = "success"
-    message: str = "Event updated successfully"
+    message: str = "Event updated successfully" 
     eventId: str # ID обновленного события (может измениться, если создается исключение)
     updatedFields: List[str] # Какие поля были фактически обновлены (опционально, для отладки)
 
@@ -795,6 +796,11 @@ async def update_calendar_event(
     if event_data.location is not None:
         google_event_body['location'] = event_data.location
         updated_fields_tracker.append('location')
+    if event_data.recurrence is not None:
+        # Если пришел пустой список, это означает "удалить все правила повторения"
+        # Если пришел список с правилами, это новые правила.
+        google_event_body['recurrence'] = event_data.recurrence
+        updated_fields_tracker.append('recurrence')
 
     # Обработка времени и isAllDay - самая сложная часть
     # Нужно учитывать текущее состояние isAllDay события и новое
@@ -897,6 +903,9 @@ async def update_calendar_event(
             # event_id должен быть ID конкретного экземпляра. Patch на него создаст исключение.
             logger.info(f"Updating SINGLE_INSTANCE for event ID: {target_event_id_for_api_call}")
             # Ничего дополнительно делать с ID не нужно, используем event_id как есть.
+            if 'recurrence' in google_event_body:
+                logger.warning(f"Recurrence data sent for SINGLE_INSTANCE update of {target_event_id_for_api_call}. Google API will likely ignore it or error out. Removing for safety.")
+                del google_event_body['recurrence'] # Не меняем recurrence для одного экземпляра таким образом
 
         elif update_mode == EventUpdateMode.THIS_AND_FOLLOWING:
             logger.error(f"Update mode THIS_AND_FOLLOWING is not yet supported for event {event_id}.")
