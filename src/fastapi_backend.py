@@ -808,9 +808,12 @@ async def update_calendar_event(
         # Если меняется что-то из этого, лучше запросить текущее событие, чтобы понять его тип
         try:
             current_event = service.events().get(calendarId='primary', eventId=event_id).execute()
+            logger.info(f"Fetched current event details for ID {event_id}: {current_event}") 
+
             current_start = current_event.get('start', {})
             current_end = current_event.get('end', {})
             current_is_all_day = 'date' in current_start and 'dateTime' not in current_start
+            logger.info(f"Current event isAllDay: {current_is_all_day}, start: {current_start}, end: {current_end}")
         except HttpError as e:
             if e.resp.status == 404:
                 raise HTTPException(status_code=404, detail=f"Event {event_id} not found to update.")
@@ -818,51 +821,97 @@ async def update_calendar_event(
 
         new_is_all_day = event_data.isAllDay if event_data.isAllDay is not None else current_is_all_day
 
-        start_update = {}
-        end_update = {}
+        # Эти объекты будут добавлены в google_event_body, если в них есть изменения
+        start_patch_data = {}
+        end_patch_data = {}
 
         if new_is_all_day:
-            # Если становится или остается all-day
-            if event_data.startTime: # Новое время начала (только дата)
-                start_update['date'] = event_data.startTime
-                updated_fields_tracker.append('startTime')
-            elif event_data.isAllDay is not None and not current_is_all_day : # Переключаемся на all-day, берем дату из текущего dateTime
-                 start_update['date'] = isoparse(current_start.get('dateTime')).date().isoformat()
+            logger.info("Processing as ALL-DAY event for update.")
+            # Обязательно обнуляем dateTime и timeZone для all-day событий
+            start_patch_data = {'dateTime': None, 'timeZone': None}
+            end_patch_data = {'dateTime': None, 'timeZone': None}
 
-            if event_data.endTime: # Новое время конца (только дата)
-                end_update['date'] = event_data.endTime
+            # Устанавливаем start.date
+            if event_data.startTime:
+                start_patch_data['date'] = event_data.startTime
+                updated_fields_tracker.append('startTime')
+            elif current_is_all_day: # Уже был all-day, startTime не меняется
+                if 'date' in current_start: # Если уже было all-day
+                    start_patch_data['date'] = current_start['date'] # Сохраняем текущую дату, если не предоставлена новая
+            else: # Переход с timed на all-day, startTime не предоставлен
+                start_patch_data['date'] = isoparse(current_start['dateTime']).date().isoformat()
+
+            # Устанавливаем end.date
+            if event_data.endTime:
+                end_patch_data['date'] = event_data.endTime
                 updated_fields_tracker.append('endTime')
-            elif event_data.isAllDay is not None and not current_is_all_day :
-                 end_update['date'] = (isoparse(current_start.get('dateTime')).date() + datetime.timedelta(days=1)).isoformat() # Пример
+            elif current_is_all_day: # Уже был all-day, endTime не меняется
+                 if 'date' in current_end: # Если уже было all-day
+                    end_patch_data['date'] = current_end['date'] # Сохраняем текущую дату, если не предоставлена новая
+            else: # Переход с timed на all-day, endTime не предоставлен
+                # Конец all-day события - это начало следующего дня от start.date
+                # Убедимся, что start_patch_data['date'] уже определена
+                if 'date' in start_patch_data:
+                    calculated_end_date = (datetime.date.fromisoformat(start_patch_data['date']) + datetime.timedelta(days=1)).isoformat()
+                    end_patch_data['date'] = calculated_end_date
+                else: # Этого не должно произойти, если логика верна
+                    logger.error("Cannot determine end date for new all-day event as start date is missing.")
+                    # Можно выбросить ошибку или использовать current_start['dateTime']
+                    base_date_for_end = isoparse(current_start['dateTime']).date()
+                    end_patch_data['date'] = (base_date_for_end + datetime.timedelta(days=1)).isoformat()
             
-            if start_update: google_event_body['start'] = start_update
-            if end_update: google_event_body['end'] = end_update
-            if event_data.isAllDay is not None: updated_fields_tracker.append('isAllDay')
+            # Добавляем в тело запроса, только если есть что обновлять.
+            # Для all-day, 'date' должен быть. dateTime/timeZone: None - тоже изменение.
+            if start_patch_data: # Если есть date, или dateTime/timeZone явно обнуляются
+                google_event_body['start'] = start_patch_data
+            if end_patch_data:
+                google_event_body['end'] = end_patch_data
+
+            if event_data.isAllDay is not None:
+                 updated_fields_tracker.append('isAllDay')
 
         else: # НЕ all-day (со временем)
-            tz_id = event_data.timeZoneId or current_event.get('start', {}).get('timeZone') # Берем новую или текущую таймзону
-            if not tz_id and (event_data.startTime or event_data.endTime): # Нужна таймзона для dateTime
+            logger.info("Processing as TIMED event for update.")
+            # Обязательно обнуляем 'date' для timed событий
+            start_patch_data = {'date': None}
+            end_patch_data = {'date': None}
+
+            tz_id = event_data.timeZoneId or current_event.get('start', {}).get('timeZone')
+            if not tz_id and (event_data.startTime or event_data.endTime):
                 raise HTTPException(status_code=400, detail="timeZoneId is required when updating startTime/endTime for non-all-day events.")
 
+            # Устанавливаем start.dateTime и start.timeZone
             if event_data.startTime:
-                start_update['dateTime'] = event_data.startTime
-                if tz_id: start_update['timeZone'] = tz_id
+                start_patch_data['dateTime'] = event_data.startTime
+                if tz_id: start_patch_data['timeZone'] = tz_id
                 updated_fields_tracker.append('startTime')
-            elif event_data.isAllDay is not None and current_is_all_day : # Переключаемся с all-day на timed
-                 start_update['dateTime'] = isoparse(current_start.get('date')).isoformat() + "T09:00:00" # Пример, ставим 9 утра
-                 if tz_id: start_update['timeZone'] = tz_id
-
-
+            elif current_is_all_day and event_data.isAllDay is False: # Переход с all-day на timed, startTime не предоставлен
+                # Используем текущую дату события и ставим время по умолчанию, например 09:00
+                start_patch_data['dateTime'] = f"{current_start['date']}T09:00:00"
+                if tz_id: start_patch_data['timeZone'] = tz_id
+            
+            # Устанавливаем end.dateTime и end.timeZone
             if event_data.endTime:
-                end_update['dateTime'] = event_data.endTime
-                if tz_id: end_update['timeZone'] = tz_id
+                end_patch_data['dateTime'] = event_data.endTime
+                if tz_id: end_patch_data['timeZone'] = tz_id
                 updated_fields_tracker.append('endTime')
-            elif event_data.isAllDay is not None and current_is_all_day :
-                 end_update['dateTime'] = isoparse(current_start.get('date')).isoformat() + "T10:00:00" # Пример, ставим 10 утра
-                 if tz_id: end_update['timeZone'] = tz_id
+            elif current_is_all_day and event_data.isAllDay is False: # Переход с all-day на timed, endTime не предоставлен
+                # Используем текущую дату события и ставим время по умолчанию, например 10:00
+                # или рассчитываем от start_patch_data['dateTime']
+                if 'dateTime' in start_patch_data:
+                    # Предположим, что событие длится 1 час по умолчанию
+                    start_dt_obj = isoparse(start_patch_data['dateTime'])
+                    end_dt_obj = start_dt_obj + datetime.timedelta(hours=1)
+                    end_patch_data['dateTime'] = end_dt_obj.isoformat()
+                else: # Если startTime не был задан, используем текущую дату события + 10:00
+                    end_patch_data['dateTime'] = f"{current_start['date']}T10:00:00"
+                if tz_id: end_patch_data['timeZone'] = tz_id
 
-            if start_update: google_event_body['start'] = start_update
-            if end_update: google_event_body['end'] = end_update
+            if start_patch_data != {'date': None}: # Если есть dateTime или timeZone
+                google_event_body['start'] = start_patch_data
+            if end_patch_data != {'date': None}:
+                google_event_body['end'] = end_patch_data
+
             if event_data.isAllDay is not None: updated_fields_tracker.append('isAllDay')
             if event_data.timeZoneId is not None: updated_fields_tracker.append('timeZoneId')
 
@@ -910,7 +959,7 @@ async def update_calendar_event(
         elif update_mode == EventUpdateMode.THIS_AND_FOLLOWING:
             logger.error(f"Update mode THIS_AND_FOLLOWING is not yet supported for event {event_id}.")
             raise HTTPException(status_code=501, detail="Update mode 'this_and_following' is not yet supported.")
-
+        logger.info(f"Final Google API request body for event {target_event_id_for_api_call}: {google_event_body}")
         updated_event = service.events().patch(
             calendarId='primary',
             eventId=target_event_id_for_api_call, # ID события или экземпляра
