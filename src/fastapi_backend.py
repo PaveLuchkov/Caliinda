@@ -954,7 +954,7 @@ async def update_calendar_event(
             # Ничего дополнительно делать с ID не нужно, используем event_id как есть.
             if 'recurrence' in google_event_body:
                 logger.warning(f"Recurrence data sent for SINGLE_INSTANCE update of {target_event_id_for_api_call}. Google API will likely ignore it or error out. Removing for safety.")
-                del google_event_body['recurrence'] # Не меняем recurrence для одного экземпляра таким образом
+                # del google_event_body['recurrence'] # Не меняем recurrence для одного экземпляра таким образом
 
         elif update_mode == EventUpdateMode.THIS_AND_FOLLOWING:
             logger.error(f"Update mode THIS_AND_FOLLOWING is not yet supported for event {event_id}.")
