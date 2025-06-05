@@ -1,5 +1,4 @@
 # calendar_integration.py
-from warnings import deprecated
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build, Resource # Добавили Resource для type hint
 from googleapiclient.errors import HttpError # Для обработки ошибок API
@@ -197,7 +196,6 @@ def get_events_for_range(creds: Credentials, start_date: datetime.date, end_date
     
 
 
-@deprecated(reason="Use get_events_for_range instead, which supports date ranges and is more efficient. AI with this function no longer supported.")
 def get_events_for_date(creds: Credentials, target_date: datetime.date) -> list[SimpleCalendarEvent]:
     """
     Fetches events from the primary Google Calendar for a specific date.
