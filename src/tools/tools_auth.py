@@ -14,6 +14,13 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
+calendar_tool_provider = CalendarToolset(
+            client_id=None,
+            client_secret=None,
+            tool_filter=None
+        )
+CalendarToolset._load_toolset_with_oidc_auth()
+
 async def configure_calendar_tools(
     tool_names: List[str],
     access_token: str,
