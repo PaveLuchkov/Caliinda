@@ -225,7 +225,7 @@ logger = logging.getLogger(__name__)
 def get_access_token_from_refresh(refresh_token: str, client_id: str, client_secret: str, token_uri: str, scopes: list[str]) -> Optional[str]:
     try:
         creds = GoogleCredentials(
-            token=None, # Access token пока нет
+            token=None,
             refresh_token=refresh_token,
             token_uri=token_uri,
             client_id=client_id,
