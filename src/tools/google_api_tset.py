@@ -6,7 +6,7 @@ from google.adk.tools.base_toolset import BaseToolset
 from google.adk.tools.base_toolset import ToolPredicate
 from google.adk.tools.openapi_tool import OpenAPIToolset
 
-from google_api_tool import GoogleApiToolHttp
+from .google_api_tool import GoogleApiToolHttp
 
 from typing_extensions import override
 

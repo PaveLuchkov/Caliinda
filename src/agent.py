@@ -10,7 +10,7 @@ import src.session as ses
 from .shared import config as cfg
 # from .sub_agents import planner, calendar_action
 # from src.tools.agent_to_tool import time_finder_tool
-from src.tools.calendar_tools import calendar_tool_instance
+from src.tools.calendar_tools import calendar_tool_instance, calendar_insert_tool
 
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ root_agent = Agent(
         f"You assistant."
     ),
     # sub_agents = []
-    tools=[calendar_tool_instance]  # Используем сконфигурированный инструмент
+    tools=[calendar_insert_tool]  # Используем сконфигурированный инструмент
 )
 
 runner = Runner(

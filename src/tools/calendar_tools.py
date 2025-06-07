@@ -1,6 +1,6 @@
 import logging
 from google.adk.tools.base_toolset import ToolPredicate
-from google_api_tset import GoogleApiToolsetCustom
+from .google_api_tset import GoogleApiToolsetCustom
 
 from typing import List
 from typing import Optional
@@ -33,3 +33,4 @@ access_token = get_access_token_from_refresh(
 )
 
 calendar_tool_instance = CalendarToolset(access_token=access_token)
+calendar_insert_tool = CalendarToolset(access_token=access_token, tool_filter=["calendar_events_insert"])
