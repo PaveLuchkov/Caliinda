@@ -1,102 +1,154 @@
 import os
 import logging
-import asyncio
+from google.adk.tools.google_api_tool.googleapi_to_openapi_converter import GoogleApiToOpenApiConverter
+from google.adk.agents.readonly_context import ReadonlyContext
+from google.adk.auth import OpenIdConnectWithConfig
+from google.adk.tools.base_toolset import BaseToolset
+from google.adk.tools.base_toolset import ToolPredicate
+from google.adk.tools.openapi_tool import OpenAPIToolset
+
+from google.adk.tools import BaseTool
+from google.adk.auth import AuthCredential
+from google.adk.auth import AuthCredentialTypes
+from google.adk.auth.auth_credential import HttpAuth, HttpCredentials
+from google.adk.tools.openapi_tool import RestApiTool
+from google.adk.tools.tool_context import ToolContext
+
+from google.genai.types import FunctionDeclaration
+
+from typing_extensions import override
+
+import inspect
+import os
+from typing import Any
+from typing import List
+from typing import Optional
+from typing import Type
+from typing import Union
+from typing import Dict
+
 from src.auth.google_token import get_access_token_from_refresh
 import src.shared.config as cfg
 from src.tools.tools_auth import configure_calendar_tools
-from google.adk.tools.google_api_tool import GoogleApiTool
+
 
 logger = logging.getLogger(__name__)
-# logging.basicConfig(level=logging.INFO) # Если уже настроено глобально, можно убрать
+logging.basicConfig(level=logging.INFO)
 
-# УДАЛЯЕМ ЭТОТ ЛОГ, ОН ОТНОСИЛСЯ К СТАРОМУ calendar_tool_set
-# logger.info(f"calendar_tool_set configured with app's client_id/secret.")
+access_token = get_access_token_from_refresh(
+    refresh_token=cfg.HARDCODED_REFRESH_TOKEN,
+    client_id=cfg.GOOGLE_CLIENT_ID,
+    client_secret=cfg.GOOGLE_CLIENT_SECRET,
+    token_uri=cfg.TOKEN_URI,
+    scopes=cfg.SCOPES
+)
 
-# Глобальный кэш для сконфигурированных инструментов
-_tools_cache: dict[str, GoogleApiTool] = {}
-_tools_cache_lock = asyncio.Lock()
+class GoogleApiToolHttp(BaseTool):
 
-async def _ensure_tools_configured_if_needed():
-    """
-    Вспомогательная асинхронная функция.
-    Конфигурирует все необходимые инструменты, если кэш пуст.
-    Вызывается под блокировкой _tools_cache_lock.
-    """
-    global _tools_cache # работаем с глобальным кэшем
-    
-    # Эта проверка дублируется в get_calendar_tool, но здесь она нужна,
-    # чтобы не делать лишнюю работу, если другая корутина уже заполнила кэш,
-    # пока текущая ждала блокировку.
-    if _tools_cache:
-        return
-
-    logger.info("Кэш инструментов пуст или запрошенный инструмент отсутствует, выполняю конфигурацию...")
-    access_token = get_access_token_from_refresh(
-        refresh_token=cfg.HARDCODED_REFRESH_TOKEN,
-        client_id=cfg.GOOGLE_CLIENT_ID,
-        client_secret=cfg.GOOGLE_CLIENT_SECRET,
-        token_uri=cfg.TOKEN_URI,
-        scopes=cfg.SCOPES
+  def __init__(
+      self,
+      rest_api_tool: RestApiTool,
+      access_token: Optional[str] = None,
+  ):
+    super().__init__(
+        name=rest_api_tool.name,
+        description=rest_api_tool.description,
+        is_long_running=rest_api_tool.is_long_running,
     )
-    if not access_token:
-        logger.error("Не удалось получить access_token для конфигурации инструментов.")
-        # В реальном приложении здесь лучше выбросить исключение,
-        # чтобы вызывающий код мог его обработать.
-        # raise Exception("Failed to get access token for tools configuration")
-        return # Если не выбрасываем исключение, кэш останется пустым
+    self._rest_api_tool = rest_api_tool
+    self.configure_auth(access_token)
 
-    # Список ВСЕХ инструментов календаря, которые могут понадобиться приложению
-    all_possible_calendar_tool_names = [
-        "calendar_events_list",
-        "calendar_events_insert",
-        # Добавь сюда другие инструменты, если они тебе нужны глобально
-        # "calendar_events_get",
-        # "calendar_events_update",
+  @override
+  def _get_declaration(self) -> FunctionDeclaration:
+    return self._rest_api_tool._get_declaration()
+
+  @override
+  async def run_async(
+      self, *, args: dict[str, Any], tool_context: Optional[ToolContext]
+  ) -> Dict[str, Any]:
+    return await self._rest_api_tool.run_async(
+        args=args, tool_context=tool_context
+    )
+
+  def configure_auth(self, access_token: str):
+    self._rest_api_tool.auth_credential = AuthCredential(
+        auth_type=AuthCredentialTypes.HTTP,
+        http=HttpAuth(
+          scheme="bearer",
+          credentials=HttpCredentials(token=access_token),
+      ),
+    )
+
+class GoogleApiToolsetCustom(BaseToolset):
+  """Google API Toolset contains tools for interacting with Google APIs.
+
+  Usually one toolsets will contains tools only related to one Google API, e.g.
+  Google Bigquery API toolset will contains tools only related to Google
+  Bigquery API, like list dataset tool, list table tool etc.
+  """
+
+  def __init__(
+      self,
+      api_name: str,
+      api_version: str,
+      access_token: Optional[str] = None,
+      tool_filter: Optional[Union[ToolPredicate, List[str]]] = None,
+  ):
+    self.api_name = api_name
+    self.api_version = api_version
+    self._access_token = access_token
+    self._openapi_toolset = self._load_toolset_with_oidc_auth()
+    self.tool_filter = tool_filter
+
+  @override
+  async def get_tools(
+      self, readonly_context: Optional[ReadonlyContext] = None
+  ) -> List[GoogleApiToolHttp]:
+    """Get all tools in the toolset."""
+
+    return [
+        GoogleApiToolHttp(tool, self._access_token)
+        for tool in await self._openapi_toolset.get_tools(readonly_context)
+        if self._is_tool_selected(tool, readonly_context)
     ]
-    
-    try:
-        configured_tools_dict = await configure_calendar_tools( # <--- ВЫЗОВ С AWAIT
-            tool_names=all_possible_calendar_tool_names,
-            access_token=access_token,
-            client_id=cfg.GOOGLE_CLIENT_ID,
-            client_secret=cfg.GOOGLE_CLIENT_SECRET,
-            scopes=cfg.SCOPES
-        )
-        if configured_tools_dict: # Проверяем, что словарь не пустой
-            _tools_cache.update(configured_tools_dict)
-            logger.info(f"Инструменты сконфигурированы и закэшированы: {list(_tools_cache.keys())}")
-        else:
-            logger.warning("configure_calendar_tools вернул пустой результат, кэш не обновлен.")
-    except Exception as e:
-        logger.error(f"Ошибка при конфигурации инструментов в _ensure_tools_configured_if_needed: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        # Можно очистить кэш или пометить его как невалидный, если была ошибка
-        _tools_cache.clear()
 
+  def set_tool_filter(self, tool_filter: Union[ToolPredicate, List[str]]):
+    self.tool_filter = tool_filter
 
-async def get_calendar_tool(tool_name: str) -> GoogleApiTool | None:
-    """
-    Асинхронно возвращает сконфигурированный инструмент календаря по имени.
-    При первом вызове (или если кэш пуст) конфигурирует все необходимые инструменты.
-    """
-    # Сначала проверяем без блокировки для быстрого пути, если инструмент уже в кэше
-    # Это оптимизация, чтобы не все запросы ждали lock.
-    # Но для корректности заполнения кэша lock все равно нужен.
-    if tool_name in _tools_cache:
-        return _tools_cache[tool_name]
+  def _load_toolset_with_oidc_auth(self) -> OpenAPIToolset:
+    spec_dict = GoogleApiToOpenApiConverter(
+        self.api_name, self.api_version
+    ).convert()
+    scope = list(
+        spec_dict['components']['securitySchemes']['oauth2']['flows'][
+            'authorizationCode'
+        ]['scopes'].keys()
+    )[0]
+    return OpenAPIToolset(
+        spec_dict=spec_dict,
+        spec_str_type='yaml',
+        auth_scheme=OpenIdConnectWithConfig(
+            authorization_endpoint=(
+                'https://accounts.google.com/o/oauth2/v2/auth'
+            ),
+            token_endpoint='https://oauth2.googleapis.com/token',
+            userinfo_endpoint=(
+                'https://openidconnect.googleapis.com/v1/userinfo'
+            ),
+            revocation_endpoint='https://oauth2.googleapis.com/revoke',
+            token_endpoint_auth_methods_supported=[
+                'client_secret_post',
+                'client_secret_basic',
+            ],
+            grant_types_supported=['authorization_code'],
+            scopes=[scope],
+        ),
+    )
 
-    async with _tools_cache_lock:
-        # Повторная проверка внутри lock, на случай если другая корутина заполнила кэш,
-        # пока эта ждала своей очереди на lock.
-        if tool_name not in _tools_cache:
-            # Если нужного инструмента нет, или кэш вообще пуст, вызываем конфигурацию.
-            await _ensure_tools_configured_if_needed() 
-        
-        tool = _tools_cache.get(tool_name)
-        if not tool:
-            logger.warning(f"Инструмент '{tool_name}' не найден в кэше даже после попытки конфигурации. "
-                           f"Проверьте, есть ли он в 'all_possible_calendar_tool_names' "
-                           f"и нет ли ошибок при его парсинге в 'configure_calendar_tools'. "
-                           f"Текущие ключи в кэше: {list(_tools_cache.keys())}")
-        return tool
+  def configure_auth(self, access_token: str):
+    self._access_token = access_token
+
+  @override
+  async def close(self):
+    if self._openapi_toolset:
+      await self._openapi_toolset.close()
