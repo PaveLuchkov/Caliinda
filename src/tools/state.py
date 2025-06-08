@@ -16,5 +16,6 @@ def initialize_session_state(callback_context: CallbackContext):
         state["current_user_time"] = str(datetime.now().replace(microsecond=0))
         state["user_language"] = "Russian"
         state["current_date_user_look_at"] = str(datetime.now().date())
+        state["temper_setting"] = "Такой братанчик кент и друг"
         
         print(f"--- Callback: State initialized: {state.to_dict()} ---")
