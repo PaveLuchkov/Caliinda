@@ -33,4 +33,8 @@ access_token = get_access_token_from_refresh(
 )
 
 calendar_tool_instance = CalendarToolset(access_token=access_token)
-calendar_insert_tool = CalendarToolset(access_token=access_token, tool_filter=["calendar_events_insert"])
+# ----
+calendar_create_event = CalendarToolset(access_token=access_token, tool_filter=["calendar_events_insert"])
+calendar_delete_event = CalendarToolset(access_token=access_token, tool_filter=["calendar_events_delete"])
+calendar_edit_event = CalendarToolset(access_token=access_token, tool_filter=["calendar_events_update"])
+# ----

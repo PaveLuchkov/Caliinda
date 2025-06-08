@@ -4,16 +4,16 @@ from ...shared import config as cfg
 
 MODEL = cfg.MODEL
 from . import prompt
-from src.tools.agent_to_tool import time_finder_tool
+from src.tools.calendar_tools import calendar_create_event, calendar_delete_event, calendar_edit_event
 
 
-planner = Agent(
-    name="Agent_for_planning",
+
+quick_patcher = Agent(
+    name="Quick_Calendar_Agent",
     model=MODEL,
     description=(
-        "Talks with user trying to evaluate concrete plan of events"
+        "Agent who can create delete and edit calendar events quickly based on user input. Specified for one action at a time. "
     ),
-    instruction=prompt.PLAN_AGENT_MAIN,
-    tools=[time_finder_tool]
+    instruction=prompt.QUICK_PATCHER,
+    tools=[calendar_create_event, calendar_delete_event, calendar_edit_event],
 )
-
