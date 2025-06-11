@@ -26,7 +26,7 @@ root_agent = Agent(
         "Agent for Orchestrating user requests related to Google Calendar"
     ),
     instruction=(
-        f"You are main router. Route user requests to one of the sub_agents which can handle specific tasks."
+        f"You are main router. Route user requests to one of the sub_agents: {quick_patcher.name} "
     ),
     sub_agents = [quick_patcher],
     before_agent_callback=initialize_session_state
