@@ -15,5 +15,5 @@ quick_patcher = Agent(
         "Agent who can create delete and edit calendar events quickly based on user input. Specified for one action at a time. "
     ),
     instruction=prompt.QUICK_PATCHER,
-    tools=[calendar_create_event, calendar_delete_event, calendar_edit_event],
+    tools=[calendar_create_event, calendar_delete_event, calendar_edit_event]
 )
