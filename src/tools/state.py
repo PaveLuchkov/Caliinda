@@ -34,3 +34,23 @@ def update_tasks(callback_context: CallbackContext):
     request_list = json.loads(request)
 
     state["tasks"] = request_list
+
+def update_search_results(callback_context: CallbackContext):
+    state = callback_context.state
+    outer_key="previous_searches"
+    n=0
+
+    if outer_key not in state:
+        state[outer_key] = {}
+    nested = state[outer_key]
+
+    if not isinstance(nested, dict):
+        raise ValueError(f"Expected a dict for key '{outer_key}', got {type(nested)}")
+    
+    existing_keys = [int(k) for k in nested.keys() if str(k).isdigit()]
+    next_index = max(existing_keys) + 1 if existing_keys else 0
+
+    # Добавляем новое значение по следующему индексу
+    nested[str(next_index)] = state.get("search_result", "")
+    state[outer_key] = nested
+

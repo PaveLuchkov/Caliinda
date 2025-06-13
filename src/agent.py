@@ -4,7 +4,7 @@ from google.adk.agents import Agent
 import litellm
 from src.tools.state import initialize_session_state
 from . import prompt
-
+from .sub_agents.quick_patcher
 from .shared import config as cfg
 # from src.tools.agent_to_tool import time_finder_tool
 
@@ -13,18 +13,6 @@ logging.basicConfig(level=logging.INFO)
 
 litellm._turn_on_debug()
 #$env:PYTHONUTF8 = "1"
-# after_tool_callback=update_tasks
-
-_reviewer = Agent(
-    name="Story_takes",
-    model=cfg.MODEL,
-    description=(
-        "Agent who takes story to review it"
-    ),
-    instruction=prompt.REVIEW,
-    output_key="story",
-    # after_agent_callback=update_tasks,
-)
 
 story_reviewer=AgentTool(agent=_reviewer)
 

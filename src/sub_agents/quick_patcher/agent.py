@@ -1,7 +1,10 @@
 from google.adk.agents import Agent
-from ...shared import config as cfg
+from google.adk.tools.agent_tool import AgentTool
 from . import prompt
+from ..lookup import _lookup
+from ...shared import config as cfg
 from ...tools import calendarActionTools
+
 
 MODEL = cfg.MODEL
 
@@ -12,6 +15,10 @@ _calendar_handler = Agent(
         "Agent who can create delete and edit calendar events"
     ),
     instruction=prompt.QUICK_PATCHER, 
-    tools=[calendarActionTools] #TODO надо добавить тул просмотра календаря - агента. Указать агента в промпте
-    # TODO для нового агента нужно добавить обработку состояния сессии и обновление последних полученных данных.
+    tools=[
+        calendarActionTools,
+        AgentTool(agent=_lookup)
+        ],
+    disallow_transfer_to_parent=True,
+    disallow_transfer_to_peers=True,
 )
