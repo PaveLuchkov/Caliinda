@@ -10,13 +10,13 @@ _lookup = Agent(
     name="Calendar_Lookup_Agent",
     model=MODEL,
     description=(
-        "Takes query of daterange of time and returns list of events in this range. "
+        "Returns list of events in range, requires DateTime start and Datetime End. "
     ),
     instruction=prompt.LOOKUP,
     tools=[calendarLookupTools],
     disallow_transfer_to_parent=True,
     disallow_transfer_to_peers=True,
-    include_contents = False,
+    include_contents ='none',
     output_key="search_result",
     after_agent_callback=update_search_results
 )

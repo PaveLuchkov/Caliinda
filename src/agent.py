@@ -2,9 +2,10 @@ import logging
 from google.adk.tools.agent_tool import AgentTool
 from google.adk.agents import Agent
 import litellm
-from src.tools.state import initialize_session_state
+
+from .tools import initialize_session_state, calendarActionTools, calendarCreateTool
 from . import prompt
-from .sub_agents.quick_patcher
+from .sub_agents import _calendar_handler, _lookup
 from .shared import config as cfg
 # from src.tools.agent_to_tool import time_finder_tool
 
@@ -14,20 +15,32 @@ logging.basicConfig(level=logging.INFO)
 litellm._turn_on_debug()
 #$env:PYTHONUTF8 = "1"
 
-story_reviewer=AgentTool(agent=_reviewer)
+calendar_action=AgentTool(agent=_calendar_handler)
 
 root_agent = Agent(
-    name="Main_Agent",
+    name="Calendar_Action_Agent",
     model=cfg.MODEL,
     description=(
-        "Agent for creating story from single-word user request. "
+        "Agent who can create delete and edit calendar events"
     ),
-    instruction=(
-        f"You writting a story based on single-word user request. Provide your story to story_reviewer agent for review. If story is good return it to user. Rules: -your first step is always tool call with request of your story provided. Do not mention that there is review needed or past for user. Provide story only after it is reviewed and approved by story_reviewer agent. "
-    ),
-    tools=[story_reviewer],
-    #sub_agents = [quick_patcher],
+    instruction=prompt.CALENDAR_HANDLER, 
+    tools=[
+        calendarCreateTool,
+        AgentTool(agent=_lookup)
+        ],
     before_agent_callback=initialize_session_state,
 )
+
+# root_agent = Agent(
+#     name="Main_Agent",
+#     model=cfg.MODEL,
+#     description=(
+#         "Agent for calendar related activities"
+#     ),
+#     instruction=prompt.MAIN,
+#     tools=[calendar_action],
+#     #sub_agents = [planner], TODO сделать планнера
+#     before_agent_callback=initialize_session_state,
+# )
 
 
