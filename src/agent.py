@@ -21,30 +21,30 @@ litellm._turn_on_debug()
 #$env:PYTHONUTF8 = "1"
 # after_tool_callback=update_tasks
 
-task_manager = Agent(
-    name="Task_Manager",
+_reviewer = Agent(
+    name="Story_takes",
     model=cfg.MODEL,
     description=(
-        "Agent who splits user request"
+        "Agent who takes story to review it"
     ),
-    instruction=prompt.TASK_MANAGER,
-    output_key="tasks",
-    after_agent_callback=update_tasks,
+    instruction=prompt.REVIEW,
+    output_key="story",
+    # after_agent_callback=update_tasks,
 )
 
-task_tool=AgentTool(agent=task_manager)
+story_reviewer=AgentTool(agent=_reviewer)
 
 root_agent = Agent(
     name="Main_Agent",
     model=cfg.MODEL,
     description=(
-        "Agent for Orchestrating user requests by pulling its requests to task-manager"
+        "Agent for creating story from single-word user request. "
     ),
     instruction=(
-        f"You are main router. Before routing user request to one of your sub-agents you MUST call task_tool to split tasks of user request. NEXT Route user requests to one of the sub_agents: {quick_patcher.name} "
+        f"You writting a story based on single-word user request. Provide your story to story_reviewer agent for review. If story is good return it to user. Rules: -your first step is always tool call with request of your story provided. Do not mention that there is review needed or past for user. Provide story only after it is reviewed and approved by story_reviewer agent. "
     ),
-    tools=[task_tool],
-    sub_agents = [quick_patcher],
+    tools=[story_reviewer],
+    #sub_agents = [quick_patcher],
     before_agent_callback=initialize_session_state,
 )
 
