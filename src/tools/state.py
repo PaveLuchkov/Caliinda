@@ -18,6 +18,7 @@ def initialize_session_state(callback_context: CallbackContext):
         state["session_initialized"] = True
         state["user:timezone"] = "Asia/Yekaterinburg"
         state["user:prefered_calendar"] = "primary"
+        state["user:weekday"] = datetime.now().strftime('%A')
         state["user:current_time"] = str(datetime.now().replace(microsecond=0))
         state["user:language"] = "Russian"
         state["user:glance_time"] = str(datetime.now().date())
