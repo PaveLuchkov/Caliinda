@@ -1,17 +1,11 @@
-import os
 import logging
 from google.adk.tools.agent_tool import AgentTool
-from google.adk.runners import Runner # Пример
 from google.adk.agents import Agent
-from google.adk.models.lite_llm import LiteLlm
-from google.adk.agents.callback_context import CallbackContext
-from datetime import datetime
 import litellm
-from src.tools.state import initialize_session_state, update_tasks
+from src.tools.state import initialize_session_state
 from . import prompt
 
 from .shared import config as cfg
-from .sub_agents import quick_patcher
 # from src.tools.agent_to_tool import time_finder_tool
 
 logger = logging.getLogger(__name__)
