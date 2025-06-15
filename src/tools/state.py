@@ -17,6 +17,7 @@ def initialize_session_state(callback_context: CallbackContext):
         # Добавляем начальные данные
         state["session_initialized"] = True
         state["user:timezone"] = "Asia/Yekaterinburg"
+        state["user:timezone_offset"] = "+05:00"
         state["user:prefered_calendar"] = "primary"
         state["user:weekday"] = datetime.now().strftime('%A')
         state["user:current_time"] = str(datetime.now().replace(microsecond=0))

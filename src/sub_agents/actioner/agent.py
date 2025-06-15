@@ -34,6 +34,7 @@ _calendar_handler = Agent(
         calendarActionTools,
         AgentTool(agent=_lookup)
         ],
+    output_key='action_report',
     disallow_transfer_to_parent=True,
     disallow_transfer_to_peers=True,
 )
