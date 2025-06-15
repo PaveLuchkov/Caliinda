@@ -47,7 +47,7 @@ root_agent = Agent(
     name="Smart_Search",
     model=cfg.MODEL,
     description=(
-        "Smart AI driven search through user's calendar. Returns analytics or simple event list. Requires DateTimeRange and Intent"
+        "Smart AI driven search through user's calendar. Requires DateTimeRange and Intent"
     ),
     instruction=prompt.SMART_SEARCH,
     tools=[calendarLookupTools],
