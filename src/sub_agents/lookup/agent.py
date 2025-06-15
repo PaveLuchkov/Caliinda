@@ -13,7 +13,7 @@ _lookup = Agent(
     description=(
         "Returns list of events in range, requires DateTime start and Datetime End. "
     ),
-    instruction=prompt.LOOKUP,
+    instruction=prompt.SMART_SEARCH,
     tools=[calendarLookupTools],
     # output_schema=LookupOutput,
     output_key="search_result",

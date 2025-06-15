@@ -1,0 +1,54 @@
+# 1.1: Найти все встречи сегодня
+{'intent': 'find_events', 'time_description': 'today', 'semantic_query': 'all meetings'}
+
+# 1.2: Найти тренировку сегодня
+{'intent': 'find_events', 'time_description': 'today', 'semantic_query': 'тренировка'}
+
+# 1.3: Найти все спортивные активности за прошлый месяц
+{'intent': 'find_events', 'time_description': 'last month', 'semantic_query': 'all sport activities'}
+
+# 1.4: Найти поездку на завтра
+{'intent': 'find_events', 'time_description': 'tomorrow', 'semantic_query': 'поездка'}
+
+# 1.5: Найти несуществующее событие
+{'intent': 'find_events', 'time_description': 'today', 'semantic_query': 'встреча с боссом'}
+
+# 1.6: Найти баскетбол на следующей неделе
+{'intent': 'find_events', 'time_description': 'next week', 'semantic_query': 'баскетбол'}
+
+
+
+# 2.1: Проверить слот, который пересекается с двумя событиями
+{'intent': 'check_conflict', 'time_description': 'from 10:30 to 11:30 today'}
+
+# 2.2: Проверить полностью свободный слот
+{'intent': 'check_conflict', 'time_description': 'from 15:00 to 15:30 today'}
+
+# 2.3: Проверить конфликт с событием на весь день
+{'intent': 'check_conflict', 'time_description': 'all day tomorrow'}
+
+
+
+# 3.1: Найти часовой слот утром
+{'intent': 'find_free_slots', 'time_description': 'from 09:00 to 12:00 today', 'duration': '60'}
+
+# 3.2: Найти полуторачасовой слот днем
+{'intent': 'find_free_slots', 'time_description': 'from 13:00 to 17:00 today', 'duration': '90'}
+
+# 3.3: Попытаться найти слот там, где его нет
+{'intent': 'find_free_slots', 'time_description': 'from 10:00 to 11:00 today', 'duration': '30'}
+
+# 3.4: Найти большой слот вечером
+{'intent': 'find_free_slots', 'time_description': 'from 18:00 to 22:00 today', 'duration': '120'}
+
+
+
+
+# 4.1: Проанализировать время на встречи в прошлом месяце
+{'intent': 'analyze_habits', 'time_description': 'last month', 'semantic_query': 'all meetings', 'analysis_prompt': 'How many hours did I spend in meetings?'}
+
+# 4.2: Проанализировать спортивные активности на этой неделе
+{'intent': 'analyze_habits', 'time_description': 'this week', 'semantic_query': 'all sport activities', 'analysis_prompt': 'What was my main sport activity?'}
+
+# 4.3: Проанализировать несуществующие данные
+{'intent': 'analyze_habits', 'time_description': 'last year', 'semantic_query': 'vacation', 'analysis_prompt': 'How many vacation days did I have?'}
