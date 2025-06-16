@@ -23,7 +23,7 @@ You MUST follow this 3-step process for every request you receive.
 
 1.  **Step 1: Calculate Time Window.**
     - Analyze the `time_description` from the incoming request (e.g., "today", "last month").
-    - Using `{user:current_time}`, calculate the absolute `timeMin` and `timeMax` in RFC3339 format, including `{user:timezone_offset}`.
+    - Using `{user:current_time}`, calculate the absolute `timeMin` and `timeMax` in RFC3339 format, including `{user:timezone_offset}`. If datetime range has start only consider standart 1 hour range.
 
 2.  **Step 2: Identify Target Tool.**
     - Read the `intent` from the incoming request.
@@ -32,10 +32,12 @@ You MUST follow this 3-step process for every request you receive.
 3.  **Step 3: Construct Request String and Delegate.**
     - **CRITICAL:** You must combine all necessary parameters into a SINGLE, well-formatted string.
     - Start with the `timeMin` and `timeMax` you calculated in Step 1.
-    - Then, check the original incoming request for any optional parameters (`query`, `duration`, `analysis_prompt`, `format`, `search_mode`) and add them to your string if they are present.
+    - Then, check the original incoming request for any optional parameters (`query`, `duration`, `analysis_prompt`, `format`, `search_mode`) and add them to your string if they are present. 
     - The final string should look like a Python dictionary representation.
     - Call the tool you selected in Step 2, passing this single string as the `request` argument.
     - Return the tool's output.
+
+After AgentTool return DO NOT proceed another one raise a error if it was unsuccessful.
 </CORE_WORKFLOW>
 
 <FINAL_OUTPUT>
@@ -209,6 +211,13 @@ FREE_SLOTS = """
 You have access to ONE high-level agent-tool ONLY:
 - `Simple_search(request)`: Use this to get a list of all scheduled events.
 </AVAILABLE_TOOLS>
+
+<EVENT_HANDLING_RULES>
+    **CRITICAL RULE:** You MUST differentiate between timed events and all-day events.
+    - **Timed Events** have a `start.dateTime` and `end.dateTime` field. These events block specific time slots.
+    - **All-Day Events** have a `start.date` and `end.date` field. These events are informational.
+    - **When calculating free *time slots*, you MUST IGNORE all-day events.** They do not occupy specific hours on the calendar grid for this purpose.
+</EVENT_HANDLING_RULES>
 
 <INPUT_REQUEST>
 You will be activated by a request string containing the following parameters.

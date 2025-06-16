@@ -86,7 +86,7 @@ _smart_search = Agent(
     ],
     output_key="search_result",
 
-
+# TODO НУЖНАЯ ОБРАБОТКА ПОВТОРЯЮЩИХСЯ СОБЫТИЙ.
 
     before_agent_callback=initialize_session_state,
     # after_agent_callback=update_search_results
