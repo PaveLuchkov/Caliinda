@@ -1,7 +1,7 @@
 from google.adk.agents import Agent
 from google.adk.tools.agent_tool import AgentTool
 from . import prompt
-from ..lookup import _lookup
+from ..smart_search import _lookup
 from ...shared import config as cfg
 from ...tools import calendarActionTools
 

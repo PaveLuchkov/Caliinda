@@ -48,3 +48,33 @@ You return only the direct, unmodified output from the tool you called.
 - User's Timezone Offset: `{user:timezone_offset}`
 </CONTEXT>
 """
+
+SIMPLE_SEARCH = """
+<CONTEXT>
+- User's Timezone Offset: `{user:timezone_offset}`
+</CONTEXT>
+"""
+
+QUERY_SEARCH = """
+<CONTEXT>
+- User's Timezone Offset: `{user:timezone_offset}`
+</CONTEXT>
+"""
+
+ANALYTICS = """
+<CONTEXT>
+- User's Timezone Offset: `{user:timezone_offset}`
+</CONTEXT>
+"""
+
+FREE_SLOTS = """
+<CONTEXT>
+- User's Timezone Offset: `{user:timezone_offset}`
+</CONTEXT>
+"""
+
+FIND_CONFLICTS = """
+<CONTEXT>
+- User's Timezone Offset: `{user:timezone_offset}`
+</CONTEXT>
+"""
