@@ -4,7 +4,7 @@ from google.adk.models.lite_llm import LiteLlm
 
 from ...shared import config as cfg
 from ...shared import LookupOutput
-from ...tools import calendarLookupTools, update_search_results
+from ...tools import calendarLookupTools, update_search_results, initialize_session_state
 MODEL = cfg.MODEL
 from . import prompt
 
@@ -76,7 +76,18 @@ _smart_search = Agent(
         "Uses toolAgents to return the best calendar search results"
     ),
     instruction=prompt.SMART_SEARCH,
-    tools=[calendarLookupTools],
+    tools=[
+        AgentTool(agent=_simple_search),
+        AgentTool(agent=_query_search),
+        AgentTool(agent=_find_free_slots),
+        AgentTool(agent=_find_conflicts),
+        AgentTool(agent=_analytics),
+
+    ],
     output_key="search_result",
+
+
+
+    before_agent_callback=initialize_session_state,
     # after_agent_callback=update_search_results
 )

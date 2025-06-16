@@ -1,7 +1,7 @@
 from google.adk.agents import Agent
 from google.adk.tools.agent_tool import AgentTool
 from . import prompt
-from ..smart_search import _lookup
+from ..smart_search import _smart_search
 from ...shared import config as cfg
 from ...tools import calendarActionTools
 
@@ -32,7 +32,7 @@ _calendar_handler = Agent(
     instruction=prompt.CALENDAR_HANDLER, 
     tools=[
         calendarActionTools,
-        AgentTool(agent=_lookup)
+        AgentTool(agent=_smart_search)
         ],
     output_key='action_report',
     disallow_transfer_to_parent=True,

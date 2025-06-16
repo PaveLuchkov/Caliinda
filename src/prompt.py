@@ -100,8 +100,3 @@ Your most critical task is to construct a single, comprehensive `request` string
 - User's preferred calendar: {user:prefered_calendar}
 </CONTEXTUAL_DATA>
 """
-from .sub_agents.actioner.prompt import CALENDAR_HANDLER
-CALENDAR_HANDLER = CALENDAR_HANDLER
-
-from .sub_agents.lookup.prompt import SMART_SEARCH
-SMART_SEARCH = SMART_SEARCH

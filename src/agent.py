@@ -5,7 +5,7 @@ import litellm
 
 from .tools import initialize_session_state, calendarActionTools, calendarCreateTool, calendarLookupTools, update_search_results
 from . import prompt
-from .sub_agents import _calendar_handler, _lookup
+from .sub_agents import _calendar_handler, _smart_search
 from .shared import config as cfg
 # from src.tools.agent_to_tool import time_finder_tool
 
@@ -43,17 +43,4 @@ calendar_action=AgentTool(agent=_calendar_handler)
 #     before_agent_callback=initialize_session_state,
 # )
 
-root_agent = Agent(
-    name="Smart_Search",
-    model=cfg.MODEL,
-    description=(
-        "Smart AI driven search through user's calendar. Requires DateTimeRange and Intent"
-    ),
-    instruction=prompt.SMART_SEARCH,
-    tools=[calendarLookupTools],
-    disallow_transfer_to_parent=True,
-    disallow_transfer_to_peers=True,
-    output_key="search_result",
-    before_agent_callback=initialize_session_state,
-    after_agent_callback=update_search_results
-)
+root_agent = _smart_search
