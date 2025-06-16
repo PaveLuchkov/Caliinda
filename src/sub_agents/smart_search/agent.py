@@ -37,7 +37,7 @@ _find_free_slots = Agent(
     disallow_transfer_to_parent=True,
     disallow_transfer_to_peers=True,
     instruction=prompt.FREE_SLOTS,
-    tools=[calendarLookupTools],
+    tools=[AgentTool(agent=_simple_search)],
     output_key="free_slots"
 )
 
