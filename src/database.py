@@ -4,7 +4,8 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.sql import func as sql_func # Переименовали импорт func, чтобы не конфликтовать с Column func
 from contextlib import contextmanager
 import logging
-import src.config as config # Импортируем наш конфиг
+import src.config as config
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,6 @@ def get_db_session(): # Переименовал для ясности, что �
         db.close()
 
 # --- Функции для работы с пользователями (те же) ---
-from typing import Optional # Добавим импорт Optional
 
 def get_user_by_google_id(db_session, google_id: str) -> Optional[User]:
     return db_session.query(User).filter(User.google_id == google_id).first()

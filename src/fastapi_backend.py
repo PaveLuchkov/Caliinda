@@ -21,11 +21,8 @@ import src.config as config # Наш файл конфигурации
 from src.database import get_db_session # Функция для получения сессии БД
 import src.database as db_utils # Функции для работы с БД (get_user_by_google_id, etc.)
 from sqlalchemy.orm import Session # Тип для сессии БД
-from src.llm_handler import LLMHandler
 from src.calendar_integration import get_events_for_date, SimpleCalendarEvent, get_events_for_range
 # from src.speech_to_text import recognize_speech
-from src.orchestrator import Orchestrator
-import src.redis_cache as redis
 from pydantic import BaseModel, Field, field_validator
 from fastapi import FastAPI, Depends, HTTPException, Body
 from google.oauth2.credentials import Credentials  # Для работы с Credentials
@@ -144,11 +141,6 @@ class DeleteEventMode(str, Enum):
     DEFAULT = "default"
     INSTANCE_ONLY = "instance_only"
     # ALL_SERIES = "all_series" # Можно использовать DEFAULT для этого
-
-# --- Initialize Handlers ---
-llm_handler_instance = LLMHandler()
-orchestrator_instance = Orchestrator(llm_handler_instance)
-
 
 # --- Helper Functions ---
 
@@ -431,118 +423,6 @@ async def get_calendar_events_range(
         logger.error(f"Unexpected error processing calendar events range request for user {user_google_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error processing request: {e}")
     
-
-# --- Эндпоинт /process (ОБНОВЛЕННЫЙ) ---
-@app.post("/process", response_model=ProcessResponse, tags=["AI Logic"])
-async def process_unified_request(
-    user_google_id: str = Depends(get_current_user_id), # Аутентификация
-    time: str = Form(..., description="Client's current time in ISO format (e.g., 2023-10-27T10:30:00+03:00)"),
-    timeZone: str = Form(..., description="Client's IANA timezone name (e.g., Europe/Moscow)"),
-    text: Optional[str] = Form(None), # Текстовый ввод
-    audio: Optional[UploadFile] = File(None), # Аудио ввод
-    db: Session = Depends(get_db), # Сессия БД
-    temper: str = Form(None), # Дополнительный параметр (если нужен)
-):
-    """
-    Handles user request (text or audio), orchestrates LLMs and Google Calendar actions.
-    Requires 'Authorization: Bearer <google_id_token>' header.
-    """
-    # --- Проверка инициализации ---
-    if not orchestrator_instance or not llm_handler_instance:
-         logger.critical("Core components (Orchestrator/LLMHandler) not initialized.")
-         raise HTTPException(status_code=503, detail="Service temporarily unavailable. Core components offline.")
-    if not redis.redis_client:
-         logger.warning("Redis unavailable, history will not be used.")
-         # Можно либо падать, либо продолжать без истории (зависит от требований)
-         # raise HTTPException(status_code=503, detail="Service temporarily unavailable. History storage offline.")
-
-    logger.info(f"Processing request for user {user_google_id} | Time: {time} ({timeZone}) | Text: {text is not None} | Audio: {audio is not None}")
-    temp_audio_path: Optional[str] = None
-    input_text: Optional[str] = None
-
-    try:
-        # 1. Получение текста (аудио или текст)
-        if audio:
-            # Проверяем размер файла перед чтением, если нужно
-            # MAX_SIZE = 10 * 1024 * 1024 # 10 MB limit example
-            # if audio.size > MAX_SIZE:
-            #     raise HTTPException(status_code=413, detail=f"Audio file too large (>{MAX_SIZE} bytes).")
-
-            # Используем безопасный временный файл
-            # Важно: убедись, что система имеет права на запись в директорию временных файлов
-            # with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as tmp: # Уточни суффикс
-            #     try:
-            #         content = await audio.read()
-            #         if not content: raise HTTPException(status_code=400, detail="Empty audio file.")
-            #         tmp.write(content)
-            #         temp_audio_path = tmp.name
-            #     except Exception as read_err:
-            #         logger.error(f"Error reading/writing audio file: {read_err}", exc_info=True)
-            #         raise HTTPException(status_code=500, detail="Error processing uploaded audio file.")
-            # logger.info(f"Audio saved to temp file: {temp_audio_path}")
-
-            # # Вызов функции распознавания речи (из speech.py)
-            # try:
-            #     recognized_text = recognize_speech(temp_audio_path)
-            # except Exception as stt_err:
-            #      logger.error(f"Speech recognition failed: {stt_err}", exc_info=True)
-            #      raise HTTPException(status_code=500, detail=f"Speech recognition service error: {stt_err}")
-
-            # if not recognized_text or not recognized_text.strip():
-            #     logger.warning(f"STT result empty for user {user_google_id}")
-            #     raise HTTPException(status_code=400, detail="Speech recognition failed or result is empty.")
-            # input_text = recognized_text.strip()
-            # logger.info(f"Recognized text: '{input_text}'")
-            raise HTTPException(status_code=400, detail="Audio processing is temporarily disabled. Please use text input.")
-        elif text:
-            if not text.strip(): raise HTTPException(status_code=400, detail="Empty text input.")
-            input_text = text.strip()
-            logger.info(f"Using provided text: '{input_text}'")
-        else:
-            raise HTTPException(status_code=400, detail="No text or audio input provided.")
-
-        # Финальная проверка input_text
-        if not input_text: # Должно быть избыточно, но безопасно
-             raise HTTPException(status_code=400, detail="Input processing resulted in empty text.")
-
-        # 2. Вызов Оркестратора
-        orchestrator_result = await orchestrator_instance.handle_user_request(
-            user_google_id=user_google_id,
-            user_text=input_text,
-            time=time,           # Время из запроса
-            timezone=timeZone,   # Таймзона из запроса
-            db=db,                # Сессия БД
-            temper = temper, # Дополнительный параметр (если нужен)
-        )
-
-        # 3. Формирование ответа FastAPI
-        response_status = orchestrator_result.get("status", "error")
-        response_message = orchestrator_result.get("message", "An unknown error occurred.")
-
-        # Логируем финальный ответ
-        logger.info(f"Orchestrator result for user {user_google_id}: Status='{response_status}', Message='{response_message[:100]}...'")
-
-        return ProcessResponse(status=response_status, message=response_message)
-
-    except HTTPException as http_ex:
-        # Логируем и перебрасываем HTTP исключения (ошибки валидации, аутентификации и т.д.)
-        logger.warning(f"HTTPException in /process: {http_ex.status_code} - {http_ex.detail}")
-        raise http_ex
-    except Exception as final_ex:
-        # Ловим все остальные неожиданные ошибки
-        logger.error(f"Unhandled exception in /process for user {user_google_id}: {final_ex}", exc_info=True)
-        # Не показываем внутренние детали ошибки пользователю
-        raise HTTPException(status_code=500, detail="An unexpected internal server error occurred.")
-    finally:
-        # Очистка временного аудиофайла
-        if temp_audio_path and os.path.exists(temp_audio_path):
-            try:
-                os.unlink(temp_audio_path)
-                logger.info(f"Deleted temp audio file: {temp_audio_path}")
-            except Exception as e:
-                logger.error(f"Error deleting temp file {temp_audio_path}: {e}")
-
-
 @app.post(
     "/calendar/events",
     response_model=CreateEventResponse,
