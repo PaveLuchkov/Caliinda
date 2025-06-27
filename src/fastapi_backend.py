@@ -33,9 +33,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="Caliinda Assistant AI Backend",
-    description="Handles user requests via text/audio, orchestrates LLMs and Google Calendar.",
-    version="1.2.0"
+    title="Caliinda Backend",
+    description="Handles user requests via Google Calendar.",
+    version="1.3.0"
 )
 
 # --- CORS Configuration ---
@@ -865,7 +865,7 @@ async def update_calendar_event(
 # --- Root endpoint for testing ---
 @app.get("/", tags=["Status"])
 async def root():
-    return {"message": "Audio Calendar Assistant Backend is running locally!"}
+    return {"message": "Calendar Backend is running locally!"}
 
 # --- Код для запуска uvicorn (если запускаешь скрипт напрямую) ---
 # if __name__ == "__main__":
