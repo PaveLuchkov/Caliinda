@@ -99,7 +99,7 @@ def create_calendar_event(
 def update_calendar_event(
     event_id: str = Path(..., description="The ID of the event to update"),
     event_data: schemas.UpdateEventRequest = ...,
-    update_mode: schemas.EventUpdateMode = Query(..., description="Update mode for recurring events"),
+    update_mode: schemas.UpdateEventMode = Query(..., description="Update mode for recurring events"),
     calendar_service: GoogleCalendarService = Depends(get_calendar_service)
 ):
     """Updates an existing event in the user's primary Google Calendar."""

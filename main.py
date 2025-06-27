@@ -2,13 +2,20 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import logging
-
+import sys
+import os
+PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+    
 # Импортируем наши новые роутеры
 from src.auth.router import router as auth_router
 from src.calendar.router import router as calendar_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
 
 app = FastAPI(
     title="Caliinda Backend",
