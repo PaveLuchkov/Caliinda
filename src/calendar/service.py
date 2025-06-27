@@ -5,7 +5,7 @@ from googleapiclient.errors import HttpError
 import logging
 from googleapiclient.discovery import build
 from typing import Dict, List, Any, Optional, Tuple
-from datetime import date, datetime, timedelta, time, timezone
+import datetime
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -111,8 +111,8 @@ class GoogleCalendarService:
             logger.warning(f"Start date {start_date} is after end date {end_date}. Returning empty list.")
             return []
 
-        time_min = datetime.combine(start_date, time.min, tzinfo=timezone.utc).isoformat()
-        time_max = datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=timezone.utc).isoformat()
+        time_min = datetime.datetime.combine(start_date, datetime.time.min, tzinfo=datetime.timezone.utc).isoformat()
+        time_max = datetime.datetime.combine(end_date + datetime.timedelta(days=1), datetime.time.min, tzinfo=datetime.timezone.utc).isoformat()
 
         logger.info(f"Querying Google Calendar API with timeMin={time_min}, timeMax={time_max}")
         
@@ -230,14 +230,14 @@ class GoogleCalendarService:
             end_patch_obj = {'dateTime': None, 'timeZone': None}
 
             try:
-                start_date_obj = date.fromisoformat(start_value[:10])
+                start_date_obj = datetime.date.fromisoformat(start_value[:10])
                 start_patch_obj['date'] = start_date_obj.isoformat()
 
                 end_date_str = end_value[:10] if end_value else None
-                end_date_obj = date.fromisoformat(end_date_str) if end_date_str else start_date_obj + timedelta(days=1)
+                end_date_obj = date.fromisoformat(end_date_str) if end_date_str else start_date_obj + datetime.timedelta(days=1)
 
                 if end_date_obj <= start_date_obj:
-                    end_date_obj = start_date_obj + timedelta(days=1)
+                    end_date_obj = start_date_obj + datetime.timedelta(days=1)
                 
                 end_patch_obj['date'] = end_date_obj.isoformat()
 
