@@ -4,8 +4,8 @@ from googleapiclient.discovery import build, Resource
 from googleapiclient.errors import HttpError
 import logging
 from googleapiclient.discovery import build
-from typing import Dict, List, Any, Optional
-import datetime
+from typing import Dict, List, Any, Optional, Tuple
+from datetime import date, datetime, timedelta, time, timezone
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ class GoogleCalendarService:
     с Google Calendar API.
     """
 
-    def __init__(self, creds: Credentials):
+    def __init__(self, creds: Credentials, user_email: str):
         """
         Инициализирует сервис с учетными данными Google.
 
@@ -78,11 +78,18 @@ class GoogleCalendarService:
         """
         if not creds:
             raise ValueError("Credentials are required to initialize GoogleCalendarService")
+        if not user_email:
+            raise ValueError("User email is required for logging and context")
         self.creds = creds
+        self.user_email = user_email
         # Создаем сервисный объект один раз при инициализации
         # cache_discovery=False рекомендуется для долгоживущих приложений, чтобы избежать
         # проблем с устаревшим кэшем API.
-        self.service: Resource = build('calendar', 'v3', credentials=self.creds, cache_discovery=False)
+        try:
+            self.service: Resource = build('calendar', 'v3', credentials=self.creds, cache_discovery=False)
+        except Exception as e:
+            logger.error(f"Failed to build Google Calendar service for user {self.user_email}: {e}")
+            raise
     
     # --- CRUD МЕТОДЫ ---
 
@@ -104,8 +111,8 @@ class GoogleCalendarService:
             logger.warning(f"Start date {start_date} is after end date {end_date}. Returning empty list.")
             return []
 
-        time_min = datetime.datetime.combine(start_date, datetime.time.min, tzinfo=datetime.timezone.utc).isoformat()
-        time_max = datetime.datetime.combine(end_date + datetime.timedelta(days=1), datetime.time.min, tzinfo=datetime.timezone.utc).isoformat()
+        time_min = datetime.combine(start_date, time.min, tzinfo=timezone.utc).isoformat()
+        time_max = datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=timezone.utc).isoformat()
 
         logger.info(f"Querying Google Calendar API with timeMin={time_min}, timeMax={time_max}")
         
@@ -191,83 +198,129 @@ class GoogleCalendarService:
         logger.info(f"Event created successfully. Event ID: {created_event.get('id')}")
         return created_event
 
-    def update_event(self, event_id: str, event_data: UpdateEventRequest, update_mode: UpdateEventMode) -> Dict[str, Any]:
+    def _prepare_time_patch(self, event_data: UpdateEventRequest, current_event: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Финальная, исправленная версия.
+        Совмещает чистоту нового подхода с ключевой деталью из старого кода:
+        явное обнуление полей при смене типа события.
+        """
+        time_fields_in_request = event_data.model_dump(exclude_unset=True)
+        if not any(field in time_fields_in_request for field in {'startTime', 'endTime', 'isAllDay', 'timeZoneId'}):
+            return {}
+
+        # ... (код для определения is_becoming_all_day, start_value, end_value, new_timezone остается тот же) ...
+        current_start = current_event.get('start', {})
+        current_end = current_event.get('end', {})
+        is_currently_all_day = 'date' in current_start
+        is_becoming_all_day = event_data.isAllDay if event_data.isAllDay is not None else is_currently_all_day
+        
+        start_value = event_data.startTime or current_start.get('dateTime') or current_start.get('date')
+        end_value = event_data.endTime or current_end.get('dateTime') or current_end.get('date')
+        new_timezone = event_data.timeZoneId or current_start.get('timeZone')
+
+        if not start_value:
+            return {}
+
+        time_patch = {}
+
+        if is_becoming_all_day:
+            # --- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ ---
+            # Формируем start/end объекты, явно обнуляя ненужные поля
+            start_patch_obj = {'dateTime': None, 'timeZone': None}
+            end_patch_obj = {'dateTime': None, 'timeZone': None}
+
+            try:
+                start_date_obj = date.fromisoformat(start_value[:10])
+                start_patch_obj['date'] = start_date_obj.isoformat()
+
+                end_date_str = end_value[:10] if end_value else None
+                end_date_obj = date.fromisoformat(end_date_str) if end_date_str else start_date_obj + timedelta(days=1)
+
+                if end_date_obj <= start_date_obj:
+                    end_date_obj = start_date_obj + timedelta(days=1)
+                
+                end_patch_obj['date'] = end_date_obj.isoformat()
+
+                time_patch['start'] = start_patch_obj
+                time_patch['end'] = end_patch_obj
+            except (ValueError, TypeError) as e:
+                raise ValueError(f"Invalid date format for start or end time: {e}")
+
+        else: # Для событий с точным временем
+            # --- СИММЕТРИЧНОЕ ИЗМЕНЕНИЕ ---
+            # При переходе на timed-событие, нужно явно обнулить 'date'
+            start_patch_obj = {'date': None}
+            end_patch_obj = {'date': None}
+
+            if not new_timezone:
+                raise ValueError("Timezone is required for non-all-day events.")
+
+            start_patch_obj['dateTime'] = start_value
+            start_patch_obj['timeZone'] = new_timezone
+            if end_value:
+                end_patch_obj['dateTime'] = end_value
+                end_patch_obj['timeZone'] = new_timezone
+            
+            time_patch['start'] = start_patch_obj
+            if 'dateTime' in end_patch_obj: # Добавляем end только если есть что обновлять
+                time_patch['end'] = end_patch_obj
+                
+        return time_patch
+
+    def update_event(self, event_id: str, event_data: UpdateEventRequest, update_mode: UpdateEventMode) -> Tuple[Dict[str, Any], List[str]]:
         """
         Обновляет существующее событие.
 
-        Args:
-            event_id: ID события для обновления.
-            event_data: Pydantic модель с полями для обновления.
-            update_mode: Режим обновления для повторяющихся событий.
-
         Returns:
-            Словарь, представляющий обновленное событие от Google API.
-
-        Raises:
-            HttpError: В случае ошибки от Google Calendar API.
-            NotImplementedError: если используется неподдерживаемый режим.
+            Кортеж из (словарь обновленного события, список обновленных полей).
         """
-        # Твоя очень подробная и качественная логика обновления переезжает сюда.
-        # Я немного ее почистил и адаптировал под сервисный слой.
-        
-        # 1. Получаем текущее состояние события, чтобы понять, как его менять
         try:
             current_event = self.service.events().get(calendarId='primary', eventId=event_id).execute()
         except HttpError as e:
             logger.error(f"Cannot fetch event {event_id} to update: {e}")
-            raise  # Пробрасываем ошибку наверх
+            raise
 
-        # 2. Формируем тело запроса только из тех полей, что пришли
-        google_event_body = event_data.model_dump(exclude_unset=True, exclude_none=True)
+        # 1. Формируем тело для patch-запроса, начиная с простых полей
+        # Мы не мутируем исходный словарь, а создаем новый.
+        patch_body = event_data.model_dump(
+            exclude_unset=True, 
+            exclude_none=True,
+            # Исключаем поля, которые требуют специальной обработки
+            exclude={'startTime', 'endTime', 'isAllDay', 'timeZoneId'} 
+        )
 
-        # 3. Сложная логика обработки времени и all-day флага
-        if 'startTime' in google_event_body or 'endTime' in google_event_body or 'isAllDay' in google_event_body:
-            # Переносим твою логику...
-            current_start = current_event.get('start', {})
-            current_is_all_day = 'date' in current_start
-            new_is_all_day = event_data.isAllDay if event_data.isAllDay is not None else current_is_all_day
-            
-            start_patch, end_patch = {}, {}
-            if new_is_all_day:
-                start_patch = {'dateTime': None, 'timeZone': None, 'date': event_data.startTime or current_start.get('date')}
-                end_patch = {'dateTime': None, 'timeZone': None, 'date': event_data.endTime or current_event.get('end', {}).get('date')}
-            else:
-                tz_id = event_data.timeZoneId or current_start.get('timeZone')
-                start_patch = {'date': None, 'dateTime': event_data.startTime or current_start.get('dateTime'), 'timeZone': tz_id}
-                end_patch = {'date': None, 'dateTime': event_data.endTime or current_event.get('end', {}).get('dateTime'), 'timeZone': tz_id}
-            
-            google_event_body['start'] = start_patch
-            google_event_body['end'] = end_patch
-        
-        if 'isAllDay' in google_event_body:
-            del google_event_body['isAllDay']
-        if 'timeZoneId' in google_event_body:
-            del google_event_body['timeZoneId'] # Этого поля нет в Google API
+        # 2. Обрабатываем время и добавляем в тело запроса
+        time_patch = self._prepare_time_patch(event_data, current_event)
+        patch_body.update(time_patch)
 
-        # 4. Логика для повторяющихся событий
+        # 3. Логика для повторяющихся событий
         target_event_id = event_id
         if update_mode == UpdateEventMode.ALL_IN_SERIES:
-            master_id = current_event.get('recurringEventId')
-            if master_id:
-                logger.info(f"Updating entire series. Master ID is {master_id}")
-                target_event_id = master_id
+            if recurring_id := current_event.get('recurringEventId'):
+                logger.info(f"Update targets the entire series. Master ID: {recurring_id}")
+                target_event_id = recurring_id
         elif update_mode == UpdateEventMode.THIS_AND_FOLLOWING:
             logger.error(f"Update mode {update_mode} is not yet supported.")
             raise NotImplementedError("Update mode 'this_and_following' is not yet supported.")
 
-        if not google_event_body:
+        # 4. Проверяем, есть ли что обновлять, ПОСЛЕ всех манипуляций
+        if not patch_body:
             logger.warning(f"Update request for event {event_id} had no fields to update.")
-            return current_event # Возвращаем текущее событие, так как изменений нет
+            # Возвращаем текущее событие и пустой список полей
+            return current_event, []
 
-        logger.info(f"Patching event {target_event_id} with body: {google_event_body}")
+        logger.info(f"Patching event {target_event_id} with body: {patch_body}")
+        
         updated_event = self.service.events().patch(
             calendarId='primary',
             eventId=target_event_id,
-            body=google_event_body
+            body=patch_body
         ).execute()
 
         logger.info(f"Event {updated_event.get('id')} updated successfully.")
-        return updated_event
+        
+        # Теперь мы возвращаем и событие, и список ключей, которые мы обновили
+        return updated_event, list(patch_body.keys())
 
 
     def delete_event(self, event_id: str, mode: DeleteEventMode) -> None:

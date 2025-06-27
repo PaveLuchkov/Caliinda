@@ -43,6 +43,10 @@ async def get_current_user(
 def get_calendar_service(
     current_user: user_models.User = Depends(get_current_user)
 ) -> GoogleCalendarService:
+    """
+    Dependency that provides a ready-to-use GoogleCalendarService instance
+    for the authenticated user.
+    """
     if not current_user.refresh_token:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -64,6 +68,6 @@ def get_calendar_service(
             creds.refresh(google_requests.Request())
             # TODO: Здесь можно сохранить обновленный access_token в БД, если нужно
         
-        return GoogleCalendarService(creds)
+        return GoogleCalendarService(creds=creds, user_email=current_user.email)
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create calendar service: {e}")

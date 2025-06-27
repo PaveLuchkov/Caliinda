@@ -105,9 +105,12 @@ def update_calendar_event(
     """Updates an existing event in the user's primary Google Calendar."""
     logger.info(f"Request to update event {event_id} for user {calendar_service.user_email} with mode {update_mode}")
     try:
-        # Сервис возвращает dict, который Pydantic автоматически валидирует и преобразует
-        updated_event_response = calendar_service.update_event(event_id, event_data, update_mode)
-        return updated_event_response
+        updated_event, updated_fields = calendar_service.update_event(event_id, event_data, update_mode)
+        # Формируем правильный объект ответа
+        return schemas.UpdateEventResponse(
+            eventId=updated_event.get('id'),
+            updatedFields=updated_fields
+        )
     except HttpError as e:
         handle_google_api_error(e, calendar_service.user_email, f"update_event:{event_id}")
     except ValueError as e:
