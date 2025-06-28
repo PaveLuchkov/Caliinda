@@ -234,7 +234,7 @@ class GoogleCalendarService:
                 start_patch_obj['date'] = start_date_obj.isoformat()
 
                 end_date_str = end_value[:10] if end_value else None
-                end_date_obj = date.fromisoformat(end_date_str) if end_date_str else start_date_obj + datetime.timedelta(days=1)
+                end_date_obj = datetime.date.fromisoformat(end_date_str) if end_date_str else start_date_obj + datetime.timedelta(days=1)
 
                 if end_date_obj <= start_date_obj:
                     end_date_obj = start_date_obj + datetime.timedelta(days=1)
